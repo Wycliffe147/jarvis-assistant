@@ -1,7 +1,16 @@
 import subprocess
 import json
 import requests
+import math
 from jarvis.config import COLOR_GRAY, COLOR_RESET
+
+def _haversine_distance(lat1, lon1, lat2, lon2):
+    R = 6371  # Earth radius in km
+    d_lat = math.radians(lat2 - lat1)
+    d_lon = math.radians(lon2 - lon1)
+    a = math.sin(d_lat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
 
 def open_url(url: str):
     subprocess.run(["termux-open-url", url], stdin=subprocess.DEVNULL)
@@ -17,6 +26,7 @@ def scan_wifi():
 
 def _fetch_coordinates(provider: str, timeout: int) -> dict | None:
     try:
+        # Note: 'once' might return cached results if the system hasn't updated recently.
         result = subprocess.run(
             ["termux-location", "-p", provider, "-r", "once"],
             capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL
@@ -71,7 +81,8 @@ def _find_nearby_landmarks(lat: float, lon: float, radius: int = 500) -> list:
         );
         out body;
         """
-        r = requests.get(overpass_url, params={'data': overpass_query}, timeout=15)
+        headers = {"User-Agent": "TermuxAIAssistant/1.0"}
+        r = requests.get(overpass_url, params={'data': overpass_query}, headers=headers, timeout=15)
         if r.status_code == 200:
             elements = r.json().get("elements", [])
             landmarks = []
@@ -139,6 +150,12 @@ def search_nearby(query: str):
     
     lat = loc_data["latitude"]
     lon = loc_data["longitude"]
+    acc = loc_data.get("accuracy", "?")
+
+    # Log the baseline location to help debug "cached" or "wrong" distance issues
+    header = f"Search Basis (Coords used for distance): {lat}, {lon} (Accuracy: {acc}m)\n"
+
+    results = []
 
     # --- Strategy 1: Nominatim (fast, ~1-2s) ---
     print(f"{COLOR_GRAY}[Searching via Nominatim for '{query}'...]{COLOR_RESET}", end="\r")
@@ -159,102 +176,84 @@ def search_nearby(query: str):
         )
         if r.status_code == 200:
             items = r.json()
-            if items:
-                results = []
-                seen = set()
-                for item in items:
-                    name = item.get("display_name", "").split(",")[0].strip()
-                    if not name or name.lower() in seen:
-                        continue
-                    seen.add(name.lower())
-                    i_lat = float(item["lat"])
-                    i_lon = float(item["lon"])
-                    d_lat = (i_lat - lat) * 111
-                    d_lon = (i_lon - lon) * 111 * 0.98
-                    dist_km = (d_lat**2 + d_lon**2)**0.5
-                    results.append({"name": name, "dist_val": dist_km, "dist_str": f"{dist_km:.1f}km"})
-                
-                if results:
-                    results.sort(key=lambda x: x["dist_val"])
-                    unique_results = [f"- {r['name']} ({r['dist_str']})" for r in results]
-                    return f"Found {len(unique_results)} results for '{query}' nearby (via Nominatim):\n" + "\n".join(unique_results[:10])
+            seen = set()
+            for item in items:
+                name = item.get("display_name", "").split(",")[0].strip()
+                if not name or name.lower() in seen:
+                    continue
+                seen.add(name.lower())
+                i_lat = float(item["lat"])
+                i_lon = float(item["lon"])
+                dist_km = _haversine_distance(lat, lon, i_lat, i_lon)
+                results.append({"name": name, "dist_val": dist_km, "dist_str": f"{dist_km:.2f}km"})
     except Exception:
         pass
 
-    # --- Strategy 2: Overpass (Comprehensive fallback, ~10-20s) ---
-    radius = 10000
-    print(f"{COLOR_GRAY}[Nominatim empty, trying Overpass within 10km...]{COLOR_RESET}", end="\r")
-    
-    try:
-        overpass_url = "https://overpass-api.de/api/interpreter"
-        
-        # Use more efficient specific keys for common searches
-        if "hospital" in query.lower():
-            # Specifically search for medical amenities which is much faster than regex
-            overpass_query = f"""
-            [out:json][timeout:30];
-            (
-              node(around:{radius},{lat},{lon})["amenity"~"hospital|clinic|doctors|health_post",i];
-              way(around:{radius},{lat},{lon})["amenity"~"hospital|clinic|doctors|health_post",i];
-              node(around:{radius},{lat},{lon})["name"~"hospital|clinic|medical|health",i];
-              way(around:{radius},{lat},{lon})["name"~"hospital|clinic|medical|health",i];
-            );
-            out center;
-            """
-        else:
-            # For general queries, use a slightly more focused regex
-            overpass_query = f"""
-            [out:json][timeout:30];
-            (
-              node(around:{radius},{lat},{lon})["amenity"~"{query}",i];
-              node(around:{radius},{lat},{lon})["shop"~"{query}",i];
-              node(around:{radius},{lat},{lon})["name"~"{query}",i];
-              way(around:{radius},{lat},{lon})["amenity"~"{query}",i];
-              way(around:{radius},{lat},{lon})["shop"~"{query}",i];
-              way(around:{radius},{lat},{lon})["name"~"{query}",i];
-            );
-            out center;
-            """
-        
-        headers = {"User-Agent": "TermuxAIAssistant/1.0"}
-        r = requests.get(overpass_url, params={'data': overpass_query}, headers=headers, timeout=30)
-        if r.status_code == 200:
-            elements = r.json().get("elements", [])
-            results = []
-            for e in elements:
-                tags = e.get("tags", {})
-                name = tags.get("name") or tags.get("amenity") or tags.get("shop") or tags.get("official_name")
-                if name:
-                    # Calculate approximate distance
-                    e_lat = e.get("lat") or e.get("center", {}).get("lat")
-                    e_lon = e.get("lon") or e.get("center", {}).get("lon")
-                    dist_val = 999
-                    dist_str = "?"
-                    if e_lat and e_lon:
-                        d_lat = (e_lat - lat) * 111
-                        d_lon = (e_lon - lon) * 111 * 0.98
-                        dist_km = (d_lat**2 + d_lon**2)**0.5
-                        dist_val = dist_km
-                        dist_str = f"{dist_km:.1f}km"
-                    
-                    results.append({"name": name, "dist_val": dist_val, "dist_str": dist_str})
+    # --- Strategy 2: Overpass Fallback ---
+    if not results:
+        radius = 10000
+        print(f"{COLOR_GRAY}[Nominatim empty, trying Overpass for '{query}'...]{COLOR_RESET}", end="\r")
+        try:
+            overpass_url = "https://overpass-api.de/api/interpreter"
+            if "hospital" in query.lower():
+                overpass_query = f"""
+                [out:json][timeout:30];
+                (
+                  node(around:{radius},{lat},{lon})["amenity"~"hospital|clinic|doctors|health_post",i];
+                  way(around:{radius},{lat},{lon})["amenity"~"hospital|clinic|doctors|health_post",i];
+                  node(around:{radius},{lat},{lon})["name"~"hospital|clinic|medical|health",i];
+                  way(around:{radius},{lat},{lon})["name"~"hospital|clinic|medical|health",i];
+                );
+                out center;
+                """
+            else:
+                overpass_query = f"""
+                [out:json][timeout:30];
+                (
+                  node(around:{radius},{lat},{lon})["amenity"~"{query}",i];
+                  node(around:{radius},{lat},{lon})["shop"~"{query}",i];
+                  node(around:{radius},{lat},{lon})["name"~"{query}",i];
+                  way(around:{radius},{lat},{lon})["amenity"~"{query}",i];
+                  way(around:{radius},{lat},{lon})["shop"~"{query}",i];
+                  way(around:{radius},{lat},{lon})["name"~"{query}",i];
+                );
+                out center;
+                """
             
+            headers = {"User-Agent": "TermuxAIAssistant/1.0"}
+            r = requests.get(overpass_url, params={'data': overpass_query}, headers=headers, timeout=30)
+            if r.status_code == 200:
+                elements = r.json().get("elements", [])
+                for e in elements:
+                    tags = e.get("tags", {})
+                    name = tags.get("name") or tags.get("amenity") or tags.get("shop") or tags.get("official_name")
+                    if name:
+                        e_lat = e.get("lat") or e.get("center", {}).get("lat")
+                        e_lon = e.get("lon") or e.get("center", {}).get("lon")
+                        dist_val = 999
+                        dist_str = "?"
+                        if e_lat and e_lon:
+                            dist_km = _haversine_distance(lat, lon, e_lat, e_lon)
+                            dist_val = dist_km
+                            dist_str = f"{dist_km:.2f}km"
+                        results.append({"name": name, "dist_val": dist_val, "dist_str": dist_str})
+        except Exception as e:
             if not results:
-                return f"No results found for '{query}' within 10km of your location."
-            
-            # Sort by distance
-            results.sort(key=lambda x: x["dist_val"])
-            unique_results = []
-            seen = set()
-            for r in results:
-                if r["name"].lower() not in seen:
-                    unique_results.append(f"- {r['name']} ({r['dist_str']})")
-                    seen.add(r["name"].lower())
-            
-            return f"Found {len(unique_results)} results for '{query}' nearby (via Overpass):\n" + "\n".join(unique_results[:10])
-    except Exception as e:
-        return f"Error searching for nearby places: {str(e)}"
-    return "No results found."
+                return header + f"Error searching for nearby places: {str(e)}"
+
+    if not results:
+        return header + f"No results found for '{query}' within 10km of your location."
+    
+    # Sort by distance and deduplicate
+    results.sort(key=lambda x: x["dist_val"])
+    unique_results = []
+    seen = set()
+    for r in results:
+        if r["name"].lower() not in seen:
+            unique_results.append(f"- {r['name']} ({r['dist_str']})")
+            seen.add(r["name"].lower())
+    
+    return header + f"Found {len(unique_results)} results for '{query}' nearby (sorted by distance):\n" + "\n".join(unique_results[:10])
 
 def get_device_info():
     result = subprocess.run(["termux-telephony-deviceinfo"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
