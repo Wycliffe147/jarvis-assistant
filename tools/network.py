@@ -139,10 +139,51 @@ def search_nearby(query: str):
     
     lat = loc_data["latitude"]
     lon = loc_data["longitude"]
-    
-    # Increase radius to 10km for better coverage in less dense areas
+
+    # --- Strategy 1: Nominatim (fast, ~1-2s) ---
+    print(f"{COLOR_GRAY}[Searching via Nominatim for '{query}'...]{COLOR_RESET}", end="\r")
+    try:
+        delta = 0.09  # ~10km bounding box
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "q": query,
+                "format": "jsonv2",
+                "limit": 10,
+                "viewbox": f"{lon-delta},{lat+delta},{lon+delta},{lat-delta}",
+                "bounded": 1,
+                "addressdetails": 0,
+            },
+            headers={"User-Agent": "TermuxAIAssistant/1.0"},
+            timeout=12,
+        )
+        if r.status_code == 200:
+            items = r.json()
+            if items:
+                results = []
+                seen = set()
+                for item in items:
+                    name = item.get("display_name", "").split(",")[0].strip()
+                    if not name or name.lower() in seen:
+                        continue
+                    seen.add(name.lower())
+                    i_lat = float(item["lat"])
+                    i_lon = float(item["lon"])
+                    d_lat = (i_lat - lat) * 111
+                    d_lon = (i_lon - lon) * 111 * 0.98
+                    dist_km = (d_lat**2 + d_lon**2)**0.5
+                    results.append({"name": name, "dist_val": dist_km, "dist_str": f"{dist_km:.1f}km"})
+                
+                if results:
+                    results.sort(key=lambda x: x["dist_val"])
+                    unique_results = [f"- {r['name']} ({r['dist_str']})" for r in results]
+                    return f"Found {len(unique_results)} results for '{query}' nearby (via Nominatim):\n" + "\n".join(unique_results[:10])
+    except Exception:
+        pass
+
+    # --- Strategy 2: Overpass (Comprehensive fallback, ~10-20s) ---
     radius = 10000
-    print(f"{COLOR_GRAY}[Searching for '{query}' within 10km...]{COLOR_RESET}", end="\r")
+    print(f"{COLOR_GRAY}[Nominatim empty, trying Overpass within 10km...]{COLOR_RESET}", end="\r")
     
     try:
         overpass_url = "https://overpass-api.de/api/interpreter"
@@ -191,7 +232,7 @@ def search_nearby(query: str):
                     dist_str = "?"
                     if e_lat and e_lon:
                         d_lat = (e_lat - lat) * 111
-                        d_lon = (e_lon - lon) * 111 * 0.98 # Mzuzu is approx -11 deg
+                        d_lon = (e_lon - lon) * 111 * 0.98
                         dist_km = (d_lat**2 + d_lon**2)**0.5
                         dist_val = dist_km
                         dist_str = f"{dist_km:.1f}km"
@@ -210,7 +251,7 @@ def search_nearby(query: str):
                     unique_results.append(f"- {r['name']} ({r['dist_str']})")
                     seen.add(r["name"].lower())
             
-            return f"Found {len(unique_results)} results for '{query}' nearby (sorted by distance):\n" + "\n".join(unique_results[:10])
+            return f"Found {len(unique_results)} results for '{query}' nearby (via Overpass):\n" + "\n".join(unique_results[:10])
     except Exception as e:
         return f"Error searching for nearby places: {str(e)}"
     return "No results found."
