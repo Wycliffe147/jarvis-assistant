@@ -2,7 +2,7 @@ from jarvis.tools.device import vibrate, get_battery_status, torch, set_brightne
 from jarvis.tools.media import speak, tts_engines, set_volume, get_volume, play_media, stop_media, pause_media, next_track, previous_track, get_media_info, find_music, open_music_app, stop_recording
 from jarvis.tools.comms import send_sms, list_sms, get_call_log, get_contacts, find_contact, make_call, open_dialer
 from jarvis.tools.system import get_clipboard, set_clipboard, show_notification, remove_notification, set_wallpaper, show_dialog, fingerprint_auth, show_toast, share
-from jarvis.tools.network import open_url, get_wifi_info, scan_wifi, get_location, get_device_info, get_cell_info
+from jarvis.tools.network import open_url, get_wifi_info, scan_wifi, get_location, get_device_info, get_cell_info, search_nearby
 from jarvis.tools.camera import take_photo, analyze_photo, local_ocr
 from jarvis.tools.apps import list_apps, open_app, search_launcher_apps
 
@@ -20,6 +20,7 @@ TOOLS = {
     "set_clipboard":       set_clipboard,
     "open_url":            open_url,
     "get_location":        get_location,
+    "search_nearby":       search_nearby,
     "get_wifi_info":       get_wifi_info,
     "scan_wifi":           scan_wifi,
     "get_device_info":     get_device_info,
@@ -55,7 +56,7 @@ TOOLS = {
 }
 
 DATA_TOOLS = {
-    "get_battery_status", "get_volume", "get_clipboard", "get_location",
+    "get_battery_status", "get_volume", "get_clipboard", "get_location", "search_nearby",
     "get_wifi_info", "scan_wifi", "get_device_info", "get_cell_info",
     "list_sms", "get_call_log", "get_contacts", "get_media_info",
     "get_sensor", "tts_engines", "show_dialog", "fingerprint_auth",
@@ -77,6 +78,7 @@ get_clipboard()                  - Read clipboard contents
 set_clipboard(text)              - Write text to clipboard
 open_url(url)                    - Open a URL in browser/app
 get_location()                   - Get GPS location (lat, lon, altitude, speed)
+search_nearby(query)             - Search for specific places (e.g. 'hospital', 'bank') nearby. Returns names and distances.
 get_wifi_info()                  - Get current WiFi connection details
 scan_wifi()                      - Scan for nearby WiFi networks
 get_device_info()                - Get device/telephony info
