@@ -1,12 +1,29 @@
 import subprocess
 import os
-from jarvis.config import MUSIC_APP, COLOR_GRAY, COLOR_RESET
+from jarvis.config import (
+    MUSIC_APP, COLOR_GRAY, COLOR_RESET, 
+    PIPER_UBUNTU_PATH, PIPER_UBUNTU_MODEL, PIPER_UBUNTU_OUTPUT, PIPER_OUTPUT
+)
 from jarvis.cache.music_cache import _load_music_cache, _save_music_cache, _scan_music_files
 from jarvis.cache.activity_cache import _load_activity_cache, _save_activity_cache
 
 def speak(text: str):
-    subprocess.run(["termux-tts-speak", text], stdin=subprocess.DEVNULL)
-    return f"Spoke: {text}"
+    """Speaks text using Piper TTS inside Ubuntu proot-distro."""
+    # Generate audio
+    gen_cmd = [
+        "proot-distro", "login", "ubuntu", "--", 
+        "bash", "-c", f"echo {subprocess.list2cmdline([text])} | {PIPER_UBUNTU_PATH} --model {PIPER_UBUNTU_MODEL} --output_file {PIPER_UBUNTU_OUTPUT}"
+    ]
+    subprocess.run(gen_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    # Play audio
+    if os.path.exists(PIPER_OUTPUT):
+        subprocess.run(["termux-media-player", "play", PIPER_OUTPUT], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return f"Spoke (Piper): {text}"
+    else:
+        # Fallback to termux-tts-speak if Piper fails
+        subprocess.run(["termux-tts-speak", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return f"Spoke (Fallback): {text}"
 
 def tts_engines():
     result = subprocess.run(["termux-tts-engines"], capture_output=True, text=True, stdin=subprocess.DEVNULL)

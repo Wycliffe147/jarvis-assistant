@@ -55,6 +55,14 @@ COLOR_BLUE   = "\033[94m"
 COLOR_CYAN   = "\033[96m"
 COLOR_RESET  = "\033[0m"
 
+# --- Piper TTS config ---
+PIPER_DIR         = os.path.expanduser("~/piper")
+PIPER_MODEL       = os.path.join(PIPER_DIR, "en_GB-southern_english_female-low.onnx")
+PIPER_OUTPUT      = os.path.join(PIPER_DIR, "output.wav")
+PIPER_UBUNTU_PATH = "/data/data/com.termux/files/home/piper/piper"
+PIPER_UBUNTU_MODEL = "/data/data/com.termux/files/home/piper/en_GB-southern_english_female-low.onnx"
+PIPER_UBUNTU_OUTPUT = "/data/data/com.termux/files/home/piper/output.wav"
+
 SYSTEM_PROMPT = (
     'You are a powerful Termux Android Assistant. You control the phone via tools.\n'
     'Whisper transcription may mishear words. Use context to infer the correct intent.\n'
