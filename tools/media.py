@@ -6,24 +6,35 @@ from jarvis.config import (
 )
 from jarvis.cache.music_cache import _load_music_cache, _save_music_cache, _scan_music_files
 from jarvis.cache.activity_cache import _load_activity_cache, _save_activity_cache
+from jarvis import state
+import time
 
 def speak(text: str):
     """Speaks text using Piper TTS inside Ubuntu proot-distro."""
-    # Generate audio
-    gen_cmd = [
-        "proot-distro", "login", "ubuntu", "--", 
-        "bash", "-c", f"echo {subprocess.list2cmdline([text])} | {PIPER_UBUNTU_PATH} --model {PIPER_UBUNTU_MODEL} --output_file {PIPER_UBUNTU_OUTPUT}"
-    ]
-    subprocess.run(gen_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Set speaking lock
+    state.is_speaking = True
     
-    # Play audio
-    if os.path.exists(PIPER_OUTPUT):
-        subprocess.run(["termux-media-player", "play", PIPER_OUTPUT], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return f"Spoke (Piper): {text}"
-    else:
-        # Fallback to termux-tts-speak if Piper fails
-        subprocess.run(["termux-tts-speak", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return f"Spoke (Fallback): {text}"
+    try:
+        # Generate audio
+        gen_cmd = [
+            "proot-distro", "login", "ubuntu", "--", 
+            "bash", "-c", f"export LD_LIBRARY_PATH=/data/data/com.termux/files/home/piper; echo {subprocess.list2cmdline([text])} | {PIPER_UBUNTU_PATH} --model {PIPER_UBUNTU_MODEL} --output_file {PIPER_UBUNTU_OUTPUT}"
+        ]
+        subprocess.run(gen_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # Play audio
+        if os.path.exists(PIPER_OUTPUT):
+            # Use 'play' from Sox because it blocks until finished
+            subprocess.run(["play", PIPER_OUTPUT], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            # Fallback to termux-tts-speak if Piper fails
+            subprocess.run(["termux-tts-speak", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    finally:
+        # Release speaking lock with a small safety delay (0.5s as requested)
+        time.sleep(0.5)
+        state.is_speaking = False
+
+    return f"Spoke: {text}"
 
 def tts_engines():
     result = subprocess.run(["termux-tts-engines"], capture_output=True, text=True, stdin=subprocess.DEVNULL)

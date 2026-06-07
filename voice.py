@@ -5,6 +5,7 @@ import time
 import re
 from jarvis.config import SAMPLE_RATE, SILENCE_THRESHOLD, AUDIO_FILE, SILENCE_TIMEOUT, CHUNK_DURATION, PRE_SPEECH_LIMIT, MAX_DURATION, CHUNK_SIZE, COLOR_GRAY, COLOR_GREEN, COLOR_YELLOW, COLOR_RED, COLOR_BLUE, COLOR_RESET
 from jarvis.ai import transcribe_audio
+from jarvis import state
 
 def save_wav(filepath: str, audio: np.ndarray, sample_rate: int = SAMPLE_RATE):
     pcm = (audio * 32767).clip(-32768, 32767).astype(np.int16)
@@ -15,6 +16,9 @@ def save_wav(filepath: str, audio: np.ndarray, sample_rate: int = SAMPLE_RATE):
         wf.writeframes(pcm.tobytes())
 
 def listen_for_wake_word(wake_word: str = "jarvis") -> str | None:
+    if state.is_speaking:
+        return None
+
     LISTEN_SECONDS = 2.0
     num_frames = int(SAMPLE_RATE * LISTEN_SECONDS)
     try:
@@ -27,6 +31,8 @@ def listen_for_wake_word(wake_word: str = "jarvis") -> str | None:
             return None
 
         save_wav(AUDIO_FILE, audio)
+        if state.is_speaking:
+            return None
         text = transcribe_audio(AUDIO_FILE)
         if not text:
             return None
@@ -47,6 +53,9 @@ def listen_for_wake_word(wake_word: str = "jarvis") -> str | None:
     return None
 
 def get_voice_input() -> str | None:
+    if state.is_speaking:
+        return None
+
     frames         = []
     speech_started = False
     silent_chunks  = 0
@@ -60,6 +69,10 @@ def get_voice_input() -> str | None:
     try:
         with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='float32', blocksize=CHUNK_SIZE) as stream:
             while total_chunks < max_chunks:
+                # Check lock inside loop for safety
+                if state.is_speaking:
+                    return None
+
                 chunk, _ = stream.read(CHUNK_SIZE)
                 chunk = chunk[:, 0]
                 frames.append(chunk.copy())
@@ -94,7 +107,16 @@ def get_voice_input() -> str | None:
         print(f"{COLOR_GRAY}[Transcribing...]      {COLOR_RESET}")
         audio = np.concatenate(frames)
         save_wav(AUDIO_FILE, audio)
+        if state.is_speaking:
+            return None
         text = transcribe_audio(AUDIO_FILE)
+
+        # Filter out low-signal/noise transcriptions (e.g., ".", "...", or just whitespace)
+        if text:
+            clean_text = text.strip().replace(".", "").strip()
+            if not clean_text:
+                print(f"{COLOR_GRAY}[Ignoring low-signal input: \"{text}\"]{COLOR_RESET}")
+                return None
 
         if text:
             print(f"{COLOR_BLUE}You (Voice):{COLOR_RESET} {text}")
