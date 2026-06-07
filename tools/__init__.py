@@ -1,3 +1,4 @@
+from jarvis.tools.time_utils import get_current_time, set_timer, set_alarm, schedule_action
 from jarvis.tools.device import vibrate, get_battery_status, torch, set_brightness, get_sensor
 from jarvis.tools.media import speak, tts_engines, set_volume, get_volume, play_media, stop_media, pause_media, next_track, previous_track, get_media_info, find_music, open_music_app, stop_recording
 from jarvis.tools.comms import send_sms, list_sms, get_call_log, get_contacts, find_contact, make_call, open_dialer
@@ -52,6 +53,10 @@ TOOLS = {
     "show_dialog":         show_dialog,
     "fingerprint_auth":    fingerprint_auth,
     "get_sensor":          get_sensor,
+    "get_current_time":    get_current_time,
+    "set_timer":           set_timer,
+    "set_alarm":           set_alarm,
+    "schedule_action":     schedule_action,
     "tts_engines":         tts_engines,
 }
 
@@ -59,7 +64,7 @@ DATA_TOOLS = {
     "get_battery_status", "get_volume", "get_clipboard", "get_location", "search_nearby",
     "get_wifi_info", "scan_wifi", "get_device_info", "get_cell_info",
     "list_sms", "get_call_log", "get_contacts", "get_media_info",
-    "get_sensor", "tts_engines", "show_dialog", "fingerprint_auth",
+    "get_sensor", "get_current_time", "tts_engines", "show_dialog", "fingerprint_auth",
     "find_music", "find_contact", "analyze_photo", "local_ocr", "list_apps",
     "search_launcher_apps"
 }
@@ -110,5 +115,9 @@ set_wallpaper(file, url)         - Set wallpaper from file path or URL
 show_dialog(input_type, title, hint) - Show input dialog
 fingerprint_auth()               - Trigger fingerprint authentication
 get_sensor(sensor)               - Read a sensor (light/accelerometer/gyroscope/proximity/magnetic_field)
+get_current_time()               - Get current date and time.
+set_timer(seconds, message)      - Set a timer to speak a message after x seconds.
+set_alarm(hour, minutes, message) - Set a system alarm.
+schedule_action(delay, tool, args) - Schedule a tool (by name) to run after a delay.
 tts_engines()                    - List available TTS engines
 """
