@@ -10,6 +10,40 @@ from jarvis.tools.link import link_start_server
 from jarvis.ai import call_ai, build_messages
 from jarvis.handler import handle_response, execute_text_command, classify_local_intent
 
+
+def clean_assistant_turn(full_text: str, display: str) -> str:
+    """Builds what goes into chat history for an assistant turn.
+
+    CRITICAL: never store raw JSON tool-call lines or the
+    '[Executed Results Summary]' scaffolding in history. Weak fallback models
+    (llama-3.1-8b-instant, gpt-oss-20b) will pattern-complete that exact format
+    in future turns instead of emitting a real tool call — i.e. they'll narrate
+    fake "Successfully executed ADB..." text rather than actually calling the
+    tool. History should only ever contain what the assistant actually said to
+    the user in natural language.
+    """
+    # Strip any literal JSON tool-call lines, just in case full_text leaks through.
+    lines = []
+    for line in full_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('{"tool"') or stripped.startswith('{ "tool"'):
+            continue
+        lines.append(line)
+    leftover_text = "\n".join(lines).strip()
+
+    # If the model's own text had a natural-language remainder (rare, since most
+    # tool-calling turns are pure JSON), prefer that. Otherwise fall back to the
+    # spoken/displayed summary — but never tag it as an "Executed Results Summary".
+    return leftover_text if leftover_text else display
+
+
+def append_turn(history, user_input: str, full_text: str, display: str):
+    """Single place to append a user/assistant exchange to history, ensuring the
+    assistant side is always sanitized (see clean_assistant_turn)."""
+    history.append({"role": "user", "content": user_input})
+    history.append({"role": "assistant", "content": clean_assistant_turn(full_text, display)})
+
+
 def run_voice_loop():
     print(f"{COLOR_GREEN}\n--- Jarvis Voice Wake Word Mode Active ---{COLOR_RESET}")
     print(f"Say {COLOR_YELLOW}'Jarvis'{COLOR_RESET} to activate. press Ctrl+C to stop audio loop.\n")
@@ -52,8 +86,7 @@ def run_voice_loop():
                     display = f"{confirmation}\n{result}"
                     print(f"\n{COLOR_CYAN}AI Summary (Local):{COLOR_RESET} {display}\n")
                     speak(confirmation)
-                    history.append({"role": "user", "content": user_input})
-                    history.append({"role": "assistant", "content": display})
+                    append_turn(history, user_input, confirmation, display)
                     save_persistent_history(history)
                     # Skip to follow-up logic
                 except Exception as e:
@@ -64,11 +97,7 @@ def run_voice_loop():
                     response_gen = call_ai(messages)
                     display, full_text = handle_response(response_gen, history, messages)
                     print(f"\n{COLOR_CYAN}AI Summary:{COLOR_RESET} {display}\n")
-                    history.append({"role": "user", "content": user_input})
-                    if '{"tool":' in full_text:
-                        history.append({"role": "assistant", "content": f"{full_text}\n[Executed Results Summary]: {display}"})
-                    else:
-                        history.append({"role": "assistant", "content": full_text})
+                    append_turn(history, user_input, full_text, display)
                     save_persistent_history(history)
             else:
                 messages = build_messages(history, user_input)
@@ -77,11 +106,7 @@ def run_voice_loop():
 
                 display, full_text = handle_response(response_gen, history, messages)
                 print(f"\n{COLOR_CYAN}AI Summary:{COLOR_RESET} {display}\n")
-                history.append({"role": "user", "content": user_input})
-                if '{"tool":' in full_text:
-                    history.append({"role": "assistant", "content": f"{full_text}\n[Executed Results Summary]: {display}"})
-                else:
-                    history.append({"role": "assistant", "content": full_text})
+                append_turn(history, user_input, full_text, display)
                 save_persistent_history(history)
 
             follow_up_deadline = time.time() + 10
@@ -95,11 +120,7 @@ def run_voice_loop():
                     response_gen = call_ai(messages)
                     display, full_text = handle_response(response_gen, history, messages)
                     print(f"\n{COLOR_CYAN}AI Summary:{COLOR_RESET} {display}\n")
-                    history.append({"role": "user", "content": user_input})
-                    if '{"tool":' in full_text:
-                        history.append({"role": "assistant", "content": f"{full_text}\n[Executed Results Summary]: {display}"})
-                    else:
-                        history.append({"role": "assistant", "content": full_text})
+                    append_turn(history, user_input, full_text, display)
                     save_persistent_history(history)
                     follow_up_deadline = time.time() + 10
                     continue

@@ -72,7 +72,96 @@ def classify_local_intent(text: str):
     if "vibrate" in t:
         return "vibrate", {"duration_ms": 500}, "Vibrating phone."
 
+    # --- ADB Pairing ---
+    if "pair" in t and any(k in t for k in ["device", "phone", "adb", "wireless"]):
+        return "__adb_pair__", {}, ""
+
     return None
+
+
+def _parse_dialog_result(raw: str) -> str:
+    """Extracts the user input value from a termux-dialog JSON response.
+    termux-dialog returns: {"text": "value", "code": -1}
+    Returns the text value, or empty string if cancelled.
+    """
+    try:
+        data = json.loads(raw)
+        if data.get("code") == -2:  # user dismissed/cancelled
+            return ""
+        return str(data.get("text", "")).strip()
+    except Exception:
+        return raw.strip() if raw else ""
+
+
+def handle_adb_pairing(history: deque):
+    """Runs the guided ADB pairing flow: collects all values shown on the
+    Wireless Debugging screen, pairs, then connects."""
+    from jarvis.tools.devices_ext import adb_pair_device, adb_connect
+    from jarvis.tools.system import show_dialog
+    from jarvis.tools.media import speak
+
+    print(f"{COLOR_GRAY}[Local Route: ADB Pairing]{COLOR_RESET}")
+
+    speak("On the target device, go to Settings, Developer Options, and open Wireless Debugging. I will need four things from that screen.")
+
+    # Step 1 — IP address (main Wireless Debugging screen)
+    raw = show_dialog(input_type="text", title="ADB Pairing — 1 of 4", hint="IP address from main screen (e.g. 10.51.91.29)")
+    ip = _parse_dialog_result(raw)
+    if not ip:
+        msg = "No IP address provided. Pairing cancelled."
+        speak(msg)
+        return msg
+
+    # Step 2 — Connection port (main Wireless Debugging screen, shown as "IP address & Port")
+    raw = show_dialog(input_type="text", title="ADB Pairing — 2 of 4", hint="Connection port from main screen (e.g. 37139)")
+    conn_port_str = _parse_dialog_result(raw)
+    if not conn_port_str or not conn_port_str.isdigit():
+        msg = "Invalid connection port. Pairing cancelled."
+        speak(msg)
+        return msg
+
+    # Step 3 — Pairing port (shown in the popup after tapping Pair device with pairing code)
+    speak("Now tap Pair device with pairing code on the target device.")
+    raw = show_dialog(input_type="text", title="ADB Pairing — 3 of 4", hint="Pairing port from the popup (e.g. 36931)")
+    pairing_port_str = _parse_dialog_result(raw)
+    if not pairing_port_str or not pairing_port_str.isdigit():
+        msg = "Invalid pairing port. Pairing cancelled."
+        speak(msg)
+        return msg
+
+    # Step 4 — Pairing code (shown in the same popup)
+    raw = show_dialog(input_type="text", title="ADB Pairing — 4 of 4", hint="6-digit pairing code from the popup (e.g. 738788)")
+    code = _parse_dialog_result(raw)
+    if not code:
+        msg = "No pairing code provided. Pairing cancelled."
+        speak(msg)
+        return msg
+    if not code.isdigit() or len(code) != 6:
+        msg = f"{code} is not a valid 6-digit pairing code. Please try again."
+        speak(msg)
+        return msg
+
+    # Pair
+    speak(f"Got everything. Pairing with {ip} now.")
+    pair_result = adb_pair_device(target_ip=ip, pairing_port=int(pairing_port_str), pairing_code=code)
+    speak(pair_result)
+
+    if "✅" not in pair_result:
+        history.append({"role": "user", "content": "pair new adb device"})
+        history.append({"role": "assistant", "content": pair_result})
+        save_persistent_history(history)
+        return pair_result
+
+    # Connect using the connection port from the main screen
+    speak("Pairing done. Now connecting.")
+    connect_result = adb_connect(target_ip=ip, port=int(conn_port_str))
+    speak(connect_result)
+
+    final = f"{pair_result}\nConnection: {connect_result}"
+    history.append({"role": "user", "content": "pair new adb device"})
+    history.append({"role": "assistant", "content": final})
+    save_persistent_history(history)
+    return final
 
 def handle_response(response_gen, history: deque, messages: list, _depth: int = 0) -> tuple[str, str]:
     """
@@ -197,6 +286,12 @@ def execute_text_command(command_str: str):
     local_match = classify_local_intent(command_str)
     if local_match:
         tool_name, args, confirmation = local_match
+
+        # Multi-step flows get their own handler
+        if tool_name == "__adb_pair__":
+            handle_adb_pairing(history)
+            return
+
         print(f"{COLOR_GRAY}[Local Route: {tool_name}]{COLOR_RESET}")
         try:
             result = TOOLS[tool_name](**args)

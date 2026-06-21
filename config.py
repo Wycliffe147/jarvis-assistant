@@ -26,6 +26,14 @@ URL_CHAT    = "https://api.groq.com/openai/v1/chat/completions"
 URL_WHISPER = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 MODEL_PRIMARY  = "llama-3.3-70b-versatile"
+# llama-3.1-8b-instant: fast, non-reasoning, follows the raw-JSON tool-call protocol
+# more directly than openai/gpt-oss-20b (a reasoning model that kept returning
+# empty content even with reasoning_effort=low / include_reasoning=False).
+# Previously this model hallucinated fake ADB results, but that was caused by
+# main.py writing "[Executed Results Summary]: ..." templates into chat history,
+# which it then pattern-completed. That's fixed now (see append_turn/
+# clean_assistant_turn in main.py) — history only ever contains natural-language
+# replies, never JSON tool-calls or result scaffolding.
 MODEL_FALLBACK = "llama-3.1-8b-instant"
 MODEL_VISION   = "meta-llama/llama-4-scout-17b-16e-instruct"
 

@@ -87,6 +87,43 @@ def adb_disconnect(target_ip: str = "") -> str:
     result = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     return result.stdout.strip()
 
+def adb_pair_device(target_ip: str, pairing_port: int, pairing_code: str) -> str:
+    """Pairs a new device over Wireless ADB using the pairing port and 6-digit
+    code shown on the target device's Wireless Debugging screen.
+    After successful pairing, automatically connects using the connection port
+    and saves as the default ADB target.
+
+    Args:
+        target_ip:    IP shown on the Wireless Debugging screen (e.g. '10.51.91.29')
+        pairing_port: Port shown next to the pairing code (e.g. 36931)
+        pairing_code: The 6-digit Wi-Fi pairing code shown on screen
+    """
+    pairing_code = str(pairing_code).strip()
+    if not pairing_code.isdigit() or len(pairing_code) != 6:
+        return f"Invalid pairing code '{pairing_code}'. It must be exactly 6 digits as shown on the target device."
+
+    pair_addr = f"{target_ip}:{pairing_port}"
+    print(f"[ADB Pair] Running: adb pair {pair_addr} ...")
+
+    try:
+        res = subprocess.run(
+            ["adb", "pair", pair_addr, pairing_code],
+            capture_output=True, text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=15
+        )
+        out = (res.stdout + res.stderr).strip()
+    except subprocess.TimeoutExpired:
+        return f"Pairing timed out connecting to {pair_addr}. Try again."
+    except Exception as e:
+        return f"Pairing failed with error: {e}"
+
+    if "successfully" not in out.lower() and "paired" not in out.lower():
+        return f"Pairing failed: {out}\nDouble-check the code and try again before it expires."
+
+    return f"✅ Paired with {target_ip} successfully!"
+
+
 def _is_serial(identifier: str) -> bool:
     """Returns True if identifier is a device serial (e.g. emulator-5554) rather than an IP:port."""
     import re as _re

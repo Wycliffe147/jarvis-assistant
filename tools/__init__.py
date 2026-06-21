@@ -7,7 +7,7 @@ from jarvis.tools.network import open_url, get_wifi_info, scan_wifi, set_wifi, g
 from jarvis.tools.camera import take_photo, analyze_photo, local_ocr
 from jarvis.tools.apps import list_apps, open_app, search_launcher_apps
 from jarvis.tools.link import link_start_server, link_status, link_scan, link_send_message, link_send_command, link_send_file, link_sync_clipboard
-from jarvis.tools.devices_ext import open_bluetooth_settings, adb_connect, adb_disconnect, adb_list_devices, adb_command, adb_screenshot, dlna_scan, dlna_cast, dlna_stop
+from jarvis.tools.devices_ext import open_bluetooth_settings, adb_connect, adb_disconnect, adb_pair_device, adb_list_devices, adb_command, adb_screenshot, dlna_scan, dlna_cast, dlna_stop
 from jarvis.tools.hotspot import hotspot_enable, hotspot_disable, hotspot_open_settings, hotspot_status, hotspot_scan_clients, hotspot_adb_autoconnect
 
 
@@ -78,6 +78,7 @@ TOOLS = {
     "open_bluetooth_settings": open_bluetooth_settings,
     "adb_connect":         adb_connect,
     "adb_disconnect":      adb_disconnect,
+    "adb_pair_device":     adb_pair_device,
     "adb_list_devices":    adb_list_devices,
     "adb_command":         adb_command,
     "adb_screenshot":      adb_screenshot,
@@ -99,7 +100,7 @@ DATA_TOOLS = {
     "get_sensor", "get_current_time", "tts_engines", "show_dialog", "fingerprint_auth",
     "find_music", "find_contact", "analyze_photo", "local_ocr", "list_apps",
     "search_launcher_apps", "web_search", "deep_read", "link_status", "link_scan",
-    "dlna_scan", "adb_list_devices",
+    "dlna_scan", "adb_list_devices", "adb_pair_device",
     "hotspot_status", "hotspot_scan_clients"
 }
 
@@ -168,6 +169,7 @@ link_sync_clipboard(target_ip)   - Send the local clipboard contents to a remote
 open_bluetooth_settings()        - Open the system Bluetooth settings UI for pairing and device routing.
 adb_connect(target_ip, port)     - Connect to a nearby developer/power-user phone over Wireless ADB (default port: 5555).
 adb_disconnect(target_ip)        - Disconnect from one or all Wireless ADB targets.
+adb_pair_device(target_ip, pairing_port, pairing_code) - Pair a brand new device over Wireless ADB. Use handle_adb_pairing flow instead of calling this directly — it collects all required values via show_dialog.
 adb_list_devices()               - List all currently connected ADB devices by identifier and model. Always call this first when the user asks to control another phone/device via ADB.
 adb_command(target_ip, action, params_json) - Send a command (tap, swipe, text, keyevent, launch, shell) to ADB target phone. Provide arguments as stringified JSON.
 adb_screenshot(target_ip, filename) - Takes a screenshot of the ADB target device and pulls it to the local Downloads folder.
