@@ -1,5 +1,6 @@
 import json
 import sys
+import re
 from collections import deque
 from jarvis.config import COLOR_GRAY, COLOR_RESET, COLOR_RED, COLOR_CYAN, COLOR_GREEN
 from jarvis.tools import TOOLS, DATA_TOOLS
@@ -7,66 +8,175 @@ from jarvis.ai import call_ai, build_messages
 from jarvis.history import load_persistent_history, save_persistent_history
 from jarvis.cache.activity_cache import _load_activity_cache, _save_activity_cache
 
-def handle_response(response_text: str, history: deque, messages: list, _depth: int = 0) -> str:
-    if '{"tool":' not in response_text:
-        return response_text
+def classify_local_intent(text: str):
+    """
+    Lightweight regex-based router to intercept hardware commands locally.
+    Returns (tool_name, args, confirmation_text) or None.
+    """
+    t = text.lower().strip()
+    
+    # Check for hardware keywords
+    is_torch = any(k in t for k in ["torch", "flashlight", "light"])
+    is_wifi  = any(k in t for k in ["wifi", "wi-fi"])
+    
+    # Common action keywords
+    on_keywords  = ["on", "activate", "enable", "start", "turn on"]
+    off_keywords = ["off", "deactivate", "disable", "stop", "turn off"]
+    
+    # Priority on 'off' to avoid accidental 'on' matches in phrases like 'turn off'
+    is_off = any(k in t for k in off_keywords)
+    is_on  = any(k in t for k in on_keywords) and not is_off
+    
+    # --- Torch ---
+    if is_torch:
+        if is_on:
+            return "torch", {"status": "on"}, "Flashlight enabled."
+        if is_off:
+            return "torch", {"status": "off"}, "Flashlight disabled."
+        
+    # --- WiFi ---
+    if is_wifi:
+        if is_on:
+            return "set_wifi", {"enabled": True}, "Enabling WiFi."
+        if is_off:
+            return "set_wifi", {"enabled": False}, "Disabling WiFi."
 
-    results      = []
-    tool_outputs = []
-    text         = response_text.strip()
-
-    while text:
-        start = text.find('{')
-        if start == -1:
-            break
+    # --- Volume ---
+    vol_match = re.search(r"\bvolume\b.*\b(\d+)\b", t)
+    if vol_match:
         try:
-            decoder = json.JSONDecoder()
-            tool_data, end_idx = decoder.raw_decode(text, start)
-        except json.JSONDecodeError as e:
-            results.append(f"[JSON Error: {e}]")
-            break
+            val = int(vol_match.group(1))
+            return "set_volume", {"stream": "music", "volume": val}, f"Volume set to {val}."
+        except: pass
+    if any(k in t for k in ["volume up", "louder", "increase volume"]):
+        return "set_volume", {"stream": "music", "volume": 12}, "Increasing volume."
+    if any(k in t for k in ["volume down", "quieter", "decrease volume"]):
+        return "set_volume", {"stream": "music", "volume": 5}, "Decreasing volume."
+    if "mute" in t:
+        return "set_volume", {"stream": "music", "volume": 0}, "Volume muted."
 
-        tool_name = tool_data.get("tool")
-        args      = tool_data.get("args", {})
+    # --- Battery ---
+    if any(x in t for x in ["battery", "charge", "percentage"]):
+        return "get_battery_status", {}, "Checking battery status..."
 
-        if tool_name not in TOOLS:
-            results.append(f"[Unknown tool: {tool_name}]")
-        else:
-            print(f"{COLOR_GRAY}[Running {tool_name}...]{COLOR_RESET}")
+    # --- Location ---
+    if any(k in t for k in ["location", "gps"]):
+        if any(k in t for k in on_keywords + off_keywords + ["settings", "toggle"]):
+            return "open_location_settings", {}, "Opening location settings."
+
+    # --- Time/Date ---
+    if any(x in t for x in ["time is it", "current time", "what time", "what's the time"]):
+        return "get_current_time", {}, "Getting current time..."
+    
+    # --- Vibration ---
+    if "vibrate" in t:
+        return "vibrate", {"duration_ms": 500}, "Vibrating phone."
+
+    return None
+
+def handle_response(response_gen, history: deque, messages: list, _depth: int = 0) -> tuple[str, str]:
+    """
+    Processes a streaming response generator from call_ai.
+    Parses and executes tools as soon as they are complete.
+    Returns (display_text, full_raw_text).
+    """
+    full_text = ""
+    tool_outputs = []
+    final_results = []
+    buffer = ""
+
+    def process_segment(segment: str):
+        nonlocal buffer
+        buffer += segment
+        
+        while "{" in buffer:
+            start_idx = buffer.find("{")
+            
+            # Simple balancing to find the end of the JSON object
+            brace_count = 0
+            end_idx = -1
+            for i in range(start_idx, len(buffer)):
+                if buffer[i] == "{":
+                    brace_count += 1
+                elif buffer[i] == "}":
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_idx = i + 1
+                        break
+            
+            if end_idx == -1:
+                break
+            
+            json_str = buffer[start_idx:end_idx]
+            
             try:
-                result = TOOLS[tool_name](**args)
-                results.append(f"[{tool_name}] \u2192 {result}")
-                tool_outputs.append({"tool": tool_name, "result": result})
-            except Exception as e:
-                results.append(f"[{tool_name} Error: {e}]")
+                if '"tool"' in json_str or "'tool'" in json_str:
+                    repaired = json_str.replace("'", '"')
+                    try:
+                        tool_data = json.loads(repaired)
+                    except:
+                        tool_data = json.loads(json_str)
+                    
+                    tool_name = tool_data.get("tool")
+                    args = tool_data.get("args", {})
+                    
+                    if tool_name in TOOLS:
+                        print(f"\n{COLOR_GRAY}[Running {tool_name}...]{COLOR_RESET}")
+                        try:
+                            result = TOOLS[tool_name](**args)
+                            if tool_name not in DATA_TOOLS:
+                                final_results.append(str(result))
+                            else:
+                                final_results.append(f"[{tool_name}] \u2192 {result}")
+                            tool_outputs.append({"tool": tool_name, "result": result})
+                        except Exception as e:
+                            final_results.append(f"[{tool_name} Error: {e}]")
+                    else:
+                        final_results.append(f"[Unknown tool: {tool_name}]")
+                else:
+                    final_results.append(json_str)
+            except Exception:
+                final_results.append(json_str)
 
-        text = text[start + end_idx:].strip()
+            buffer = buffer[end_idx:]
+
+    for chunk, success in response_gen:
+        if not success:
+            return f"Error: {chunk}", full_text
+        
+        full_text += chunk
+        # Only print if it doesn't look like we're in the middle of a JSON block
+        if "{" not in buffer and "{" not in chunk:
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+        
+        process_segment(chunk)
+
+    if buffer.strip():
+        final_results.append(buffer.strip())
+
+    display = "\n".join(final_results) if final_results else full_text
 
     data_results = [t for t in tool_outputs if t["tool"] in DATA_TOOLS]
-    if data_results and _depth == 0:
+    if data_results and _depth < 3:
+        print(f"\n{COLOR_GRAY}[Analyzing data results...]{COLOR_RESET}")
         feedback = "\n".join(f"Tool result for {t['tool']}: {t['result']}" for t in data_results)
         followup_messages = messages + [
-            {"role": "assistant", "content": response_text},
+            {"role": "assistant", "content": full_text},
             {
                 "role": "user",
                 "content": (
                     f"{feedback}\n"
-                    "Now summarize and speak the key information naturally to the user using the speak tool.\n"
-                    "CRITICAL ASSISTANT ROUTING RULES:\n"
-                    "1. If the tool result is from search_launcher_apps and doesn't contain an error, IMMEDIATELY trigger open_app using that verified package identifier mapping string.\n"
-                    "2. If find_contact returns multiple matching names or numbers, list choices via speak and ask to clarify.\n"
-                    "3. If find_contact has EXACTLY ONE clear match, call make_call.\n"
-                    "4. If the result is from find_music, play_media.\n"
-                    "5. If the result is from analyze_photo or local_ocr, speak the outcome cleanly."
+                    "Now analyze these results. If you have enough information, you MUST summarize and speak the final answer to the user using the 'speak' tool now.\n"
+                    "AUTO-SPEAK RULE: Do not just reply with text. You must use the 'speak' tool for your final summary."
                 )
             }
         ]
-        followup_text, success = call_ai(followup_messages)
-        if success:
-            followup_display = handle_response(followup_text, history, followup_messages, _depth=1)
-            results.append(followup_display)
+        followup_gen = call_ai(followup_messages)
+        followup_display, followup_full = handle_response(followup_gen, history, followup_messages, _depth=_depth + 1)
+        return followup_display, full_text + "\n" + followup_full
 
-    return "\n".join(results) if results else response_text
+    return display, full_text
 
 def execute_text_command(command_str: str):
     # Structural Check: Intercept manual Option B registrations directly
@@ -82,19 +192,35 @@ def execute_text_command(command_str: str):
         sys.exit(0)
 
     history = load_persistent_history()
-    messages = build_messages(history, command_str)
-    response_text, success = call_ai(messages)
     
-    if not success:
-        print(f"{COLOR_RED}AI Error:{COLOR_RESET} {response_text}\n")
+    # --- Local Fast-Pass Routing ---
+    local_match = classify_local_intent(command_str)
+    if local_match:
+        tool_name, args, confirmation = local_match
+        print(f"{COLOR_GRAY}[Local Route: {tool_name}]{COLOR_RESET}")
+        try:
+            result = TOOLS[tool_name](**args)
+            display = f"{confirmation}\n{result}"
+            print(f"\n{COLOR_CYAN}AI Summary (Local):{COLOR_RESET} {display}\n")
+            history.append({"role": "user", "content": command_str})
+            history.append({"role": "assistant", "content": display})
+            save_persistent_history(history)
+            return
+        except Exception as e:
+            print(f"{COLOR_RED}Local Execution Error: {e}{COLOR_RESET}")
+
+    messages = build_messages(history, command_str)
+    
+    print(f"{COLOR_GRAY}[Thinking...]{COLOR_RESET}", end="\r", flush=True)
+    response_gen = call_ai(messages)
+    
+    display, full_text = handle_response(response_gen, history, messages)
+    print(f"\n{COLOR_CYAN}AI Summary:{COLOR_RESET} {display}\n")
+    
+    history.append({"role": "user", "content": command_str})
+    if '{"tool":' in full_text:
+        history.append({"role": "assistant", "content": f"{full_text}\n[Executed Results Summary]: {display}"})
     else:
-        display = handle_response(response_text, history, messages)
-        print(f"\n{COLOR_CYAN}AI:{COLOR_RESET} {display}\n")
+        history.append({"role": "assistant", "content": full_text})
         
-        history.append({"role": "user", "content": command_str})
-        if '{"tool":' in response_text:
-            history.append({"role": "assistant", "content": f"{response_text}\n[Executed Results Summary]: {display}"})
-        else:
-            history.append({"role": "assistant", "content": response_text})
-            
-        save_persistent_history(history)
+    save_persistent_history(history)

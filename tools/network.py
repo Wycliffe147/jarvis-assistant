@@ -2,7 +2,42 @@ import subprocess
 import json
 import requests
 import math
+import re
 from jarvis.config import COLOR_GRAY, COLOR_RESET
+
+from bs4 import BeautifulSoup
+
+def deep_read(url: str):
+    """Reads and extracts the main text content from a webpage URL for deep research."""
+    print(f"{COLOR_GRAY}[Deep reading {url}...]{COLOR_RESET}", end="\r")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code != 200:
+            return f"Error: Could not access page (Status {r.status_code})"
+        
+        soup = BeautifulSoup(r.text, 'html.parser')
+        
+        # Remove script, style, nav, footer to get clean content
+        for element in soup(["script", "style", "nav", "footer", "header"]):
+            element.decompose()
+            
+        # Focus on main content areas if they exist
+        main_content = soup.find('main') or soup.find('article') or soup.find('div', class_=re.compile(r'content|main|body', re.I)) or soup
+        
+        text = main_content.get_text(separator='\n')
+        
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = '\n'.join(chunk for chunk in chunks if chunk)
+        
+        # Return a generous chunk for the AI to process (limit to 6000 chars to avoid context blowup)
+        return f"Content of {url}:\n\n" + text[:6000]
+    except Exception as e:
+        return f"Error reading page: {e}"
 
 def _haversine_distance(lat1, lon1, lat2, lon2):
     R = 6371  # Earth radius in km
@@ -12,6 +47,58 @@ def _haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
+def web_search(query: str):
+    """Searches the internet via DuckDuckGo (Resilient Termux version)."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    def fetch_results(search_url):
+        try:
+            r = requests.get(search_url, headers=headers, timeout=12)
+            if r.status_code != 200:
+                return []
+            
+            # Find result links and snippets
+            # DuckDuckGo HTML format: <a class="result__a" href="URL">Title</a> ... <a class="result__snippet">Snippet</a>
+            items = re.findall(r'class="result__a"[^>]*href="(.*?)"[^>]*>(.*?)</a>.*?class="result__snippet"[^>]*>(.*?)</a>', r.text, re.DOTALL)
+            
+            parsed = []
+            for u_raw, t_raw, s_raw in items:
+                u = u_raw.strip()
+                # Handle relative URLs if any (though DDG usually provides full ones)
+                if u.startswith('//'): u = 'https:' + u
+                
+                t = re.sub(r'<[^>]+>', '', t_raw).strip()
+                s = re.sub(r'<[^>]+>', '', s_raw).strip()
+                if t and s:
+                    parsed.append(f"- {t}\n  URL: {u}\n  {s}")
+                if len(parsed) >= 5:
+                    break
+            return parsed
+        except Exception:
+            return []
+
+    print(f"{COLOR_GRAY}[Searching the web for '{query}'...]{COLOR_RESET}", end="\r")
+    
+    # Try with news filter first if keywords present
+    news_keywords = ["news", "latest", "recent", "today", "updates"]
+    is_news = any(word in query.lower() for word in news_keywords)
+    
+    results = []
+    if is_news:
+        results = fetch_results(f"https://html.duckduckgo.com/html/?q={query}&df=w")
+    
+    # Fallback to general search if news is empty or not requested
+    if not results:
+        results = fetch_results(f"https://html.duckduckgo.com/html/?q={query}")
+
+    if not results:
+        return f"I couldn't find any search results for '{query}'. Please try a different wording."
+
+    header = "Latest Updates" if is_news else "Search Results"
+    return f"{header} for '{query}':\n\n" + "\n\n".join(results)
+
 def open_url(url: str):
     subprocess.run(["termux-open-url", url], stdin=subprocess.DEVNULL)
     return f"Opened URL: {url}"
@@ -19,6 +106,17 @@ def open_url(url: str):
 def get_wifi_info():
     result = subprocess.run(["termux-wifi-connectioninfo"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
     return result.stdout.strip()
+
+def set_wifi(enabled):
+    """Enables or disables WiFi. Handles both bool and string 'true'/'false'."""
+    if isinstance(enabled, str):
+        is_on = enabled.lower() in ["true", "on", "yes", "1"]
+    else:
+        is_on = bool(enabled)
+        
+    status = "true" if is_on else "false"
+    subprocess.run(["termux-wifi-enable", status], stdin=subprocess.DEVNULL)
+    return f"WiFi {'enabled' if is_on else 'disabled'}."
 
 def scan_wifi():
     result = subprocess.run(["termux-wifi-scaninfo"], capture_output=True, text=True, stdin=subprocess.DEVNULL)

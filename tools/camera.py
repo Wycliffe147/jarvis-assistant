@@ -4,13 +4,15 @@ import time
 import requests
 from jarvis.config import API_KEY, MODEL_VISION, URL_CHAT, VISION_MAX_PX, VISION_PHOTO_FILE, COLOR_GRAY, COLOR_RED, COLOR_RESET
 
+from jarvis.tools.device import get_sensor, torch
 def take_photo(camera: int = 0, output: str = "/sdcard/photo.jpg"):
     subprocess.run(["termux-camera-photo", "-c", str(camera), output], stdin=subprocess.DEVNULL)
     return f"Photo taken with camera {camera}, saved to {output}"
 
-def analyze_photo(prompt: str = "Describe what you see in detail.", camera: int = 0) -> str:
+def analyze_photo(prompt: str = "Analyze this image carefully. If you see any problems, error codes, or objects that need fixing, identify them and provide a solution or trigger a search for one.", camera: int = 0) -> str:
     photo_path = VISION_PHOTO_FILE
-    print(f"{COLOR_GRAY}[Taking snapshot via camera {camera}...]{COLOR_RESET}")
+
+    print(f"{COLOR_GRAY}[Taking actionable snapshot via camera {camera}...]{COLOR_RESET}")
     subprocess.run(["termux-camera-photo", "-c", str(camera), photo_path], capture_output=True, text=True, stdin=subprocess.DEVNULL)
 
     photo_saved = False
@@ -24,7 +26,6 @@ def analyze_photo(prompt: str = "Describe what you see in detail.", camera: int 
         return "Vision capture failed: Native camera failed to save image within timeout."
 
     return _process_and_upload_vision(photo_path, prompt)
-
 def _process_and_upload_vision(input_path: str, prompt: str) -> str:
     image_path = input_path
     try:
@@ -37,7 +38,7 @@ def _process_and_upload_vision(input_path: str, prompt: str) -> str:
             subprocess.run([
                 "ffmpeg", "-y", "-i", input_path,
                 "-vf", f"scale='if(gt(iw,ih),{VISION_MAX_PX},-2)':'if(gt(iw,ih),-2,{VISION_MAX_PX})'",
-                "-q:v", "2",
+                "-q:v", "5",
                 resized_path
             ], capture_output=True, stdin=subprocess.DEVNULL)
             

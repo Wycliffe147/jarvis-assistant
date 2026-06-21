@@ -1,11 +1,17 @@
 from jarvis.tools.time_utils import get_current_time, set_timer, set_alarm, schedule_action
-from jarvis.tools.device import vibrate, get_battery_status, torch, set_brightness, get_sensor
+from jarvis.tools.device import vibrate, get_battery_status, torch, set_brightness, get_sensor, open_location_settings
 from jarvis.tools.media import speak, tts_engines, set_volume, get_volume, play_media, stop_media, pause_media, next_track, previous_track, get_media_info, find_music, open_music_app, stop_recording
 from jarvis.tools.comms import send_sms, list_sms, get_call_log, get_contacts, find_contact, make_call, open_dialer
 from jarvis.tools.system import get_clipboard, set_clipboard, show_notification, remove_notification, set_wallpaper, show_dialog, fingerprint_auth, show_toast, share
-from jarvis.tools.network import open_url, get_wifi_info, scan_wifi, get_location, get_device_info, get_cell_info, search_nearby
+from jarvis.tools.network import open_url, get_wifi_info, scan_wifi, set_wifi, get_location, get_device_info, get_cell_info, search_nearby, web_search, deep_read
 from jarvis.tools.camera import take_photo, analyze_photo, local_ocr
 from jarvis.tools.apps import list_apps, open_app, search_launcher_apps
+from jarvis.tools.link import link_start_server, link_status, link_scan, link_send_message, link_send_command, link_send_file, link_sync_clipboard
+from jarvis.tools.devices_ext import open_bluetooth_settings, adb_connect, adb_disconnect, adb_list_devices, adb_command, adb_screenshot, dlna_scan, dlna_cast, dlna_stop
+from jarvis.tools.hotspot import hotspot_enable, hotspot_disable, hotspot_open_settings, hotspot_status, hotspot_scan_clients, hotspot_adb_autoconnect
+
+
+
 
 TOOLS = {
     "vibrate":             vibrate,
@@ -20,10 +26,13 @@ TOOLS = {
     "get_clipboard":       get_clipboard,
     "set_clipboard":       set_clipboard,
     "open_url":            open_url,
+    "web_search":          web_search,
+    "deep_read":           deep_read,
     "get_location":        get_location,
     "search_nearby":       search_nearby,
     "get_wifi_info":       get_wifi_info,
     "scan_wifi":           scan_wifi,
+    "set_wifi":            set_wifi,
     "get_device_info":     get_device_info,
     "get_cell_info":       get_cell_info,
     "send_sms":            send_sms,
@@ -53,11 +62,34 @@ TOOLS = {
     "show_dialog":         show_dialog,
     "fingerprint_auth":    fingerprint_auth,
     "get_sensor":          get_sensor,
+    "open_location_settings": open_location_settings,
     "get_current_time":    get_current_time,
     "set_timer":           set_timer,
     "set_alarm":           set_alarm,
     "schedule_action":     schedule_action,
     "tts_engines":         tts_engines,
+    "link_start_server":   link_start_server,
+    "link_status":         link_status,
+    "link_scan":           link_scan,
+    "link_send_message":   link_send_message,
+    "link_send_command":   link_send_command,
+    "link_send_file":      link_send_file,
+    "link_sync_clipboard": link_sync_clipboard,
+    "open_bluetooth_settings": open_bluetooth_settings,
+    "adb_connect":         adb_connect,
+    "adb_disconnect":      adb_disconnect,
+    "adb_list_devices":    adb_list_devices,
+    "adb_command":         adb_command,
+    "adb_screenshot":      adb_screenshot,
+    "dlna_scan":           dlna_scan,
+    "dlna_cast":           dlna_cast,
+    "dlna_stop":           dlna_stop,
+    "hotspot_enable":      hotspot_enable,
+    "hotspot_disable":     hotspot_disable,
+    "hotspot_open_settings": hotspot_open_settings,
+    "hotspot_status":      hotspot_status,
+    "hotspot_scan_clients": hotspot_scan_clients,
+    "hotspot_adb_autoconnect": hotspot_adb_autoconnect,
 }
 
 DATA_TOOLS = {
@@ -66,7 +98,9 @@ DATA_TOOLS = {
     "list_sms", "get_call_log", "get_contacts", "get_media_info",
     "get_sensor", "get_current_time", "tts_engines", "show_dialog", "fingerprint_auth",
     "find_music", "find_contact", "analyze_photo", "local_ocr", "list_apps",
-    "search_launcher_apps"
+    "search_launcher_apps", "web_search", "deep_read", "link_status", "link_scan",
+    "dlna_scan", "adb_list_devices",
+    "hotspot_status", "hotspot_scan_clients"
 }
 
 TOOLS_DESCRIPTION = """
@@ -82,10 +116,13 @@ remove_notification(id)          - Remove a notification by ID
 get_clipboard()                  - Read clipboard contents
 set_clipboard(text)              - Write text to clipboard
 open_url(url)                    - Open a URL in browser/app
+web_search(query)                - Search the internet for general knowledge, news, or facts. Returns snippets and URLs.
+deep_read(url)                   - Reads the full text content of a specific webpage. Use this if the search snippets from web_search are not enough to answer the question.
 get_location()                   - Get GPS location (lat, lon, altitude, speed)
 search_nearby(query)             - Search for specific places (e.g. 'hospital', 'bank') nearby. Returns names and distances.
 get_wifi_info()                  - Get current WiFi connection details
 scan_wifi()                      - Scan for nearby WiFi networks
+set_wifi(enabled)                - Enable/disable WiFi (enabled: True/False)
 get_device_info()                - Get device/telephony info
 get_cell_info()                  - Get cell tower info
 send_sms(number, message)        - Send an SMS
@@ -115,9 +152,32 @@ set_wallpaper(file, url)         - Set wallpaper from file path or URL
 show_dialog(input_type, title, hint) - Show input dialog
 fingerprint_auth()               - Trigger fingerprint authentication
 get_sensor(sensor)               - Read a sensor (light/accelerometer/gyroscope/proximity/magnetic_field)
+open_location_settings()         - Opens the Android Location/GPS settings page so the user can enable/disable it manually.
 get_current_time()               - Get current date and time.
 set_timer(seconds, message)      - Set a timer to speak a message after x seconds.
 set_alarm(hour, minutes, message) - Set a system alarm.
 schedule_action(delay, tool, args) - Schedule a tool (by name) to run after a delay.
 tts_engines()                    - List available TTS engines
+link_start_server()              - Starts the background Jarvis Link servers (TCP/UDP listener) for receiving remote commands/messages.
+link_status()                    - Get current Jarvis Link status, local IP, and ports.
+link_scan()                      - Scan the local network (Wi-Fi) to discover other active Jarvis Link nodes/phones.
+link_send_message(target_ip, message) - Sends a text transmission to a remote phone running Jarvis.
+link_send_command(target_ip, command, args_json) - Run a tool (like vibrate, speak, torch, show_toast, battery) on a remote Jarvis phone. Provide args_json as a JSON string.
+link_send_file(target_ip, filepath) - Transfer a file from this phone to a remote phone's Downloads directory.
+link_sync_clipboard(target_ip)   - Send the local clipboard contents to a remote Jarvis device's clipboard.
+open_bluetooth_settings()        - Open the system Bluetooth settings UI for pairing and device routing.
+adb_connect(target_ip, port)     - Connect to a nearby developer/power-user phone over Wireless ADB (default port: 5555).
+adb_disconnect(target_ip)        - Disconnect from one or all Wireless ADB targets.
+adb_list_devices()               - List all currently connected ADB devices by identifier and model. Always call this first when the user asks to control another phone/device via ADB.
+adb_command(target_ip, action, params_json) - Send a command (tap, swipe, text, keyevent, launch, shell) to ADB target phone. Provide arguments as stringified JSON.
+adb_screenshot(target_ip, filename) - Takes a screenshot of the ADB target device and pulls it to the local Downloads folder.
+dlna_scan()                      - Scan the local network for DLNA smart TVs, screens, and speakers.
+dlna_cast(target_ip, media_url, media_title) - Stream audio/video URLs directly to a local smart TV or speaker.
+dlna_stop(target_ip)             - Stop casting/playback on DLNA smart TV or speaker.
+hotspot_enable()                 - Enable this phone's Wi-Fi hotspot programmatically.
+hotspot_disable()                - Disable this phone's Wi-Fi hotspot.
+hotspot_open_settings()          - Open the Hotspot & Tethering settings screen.
+hotspot_status()                 - Check if hotspot is active and list connected client IPs.
+hotspot_scan_clients()           - Scan for devices connected to this phone's hotspot (ARP + nmap).
+hotspot_adb_autoconnect()        - Scan hotspot clients and auto-connect to them via ADB wireless debugging.
 """
