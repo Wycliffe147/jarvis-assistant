@@ -4,7 +4,7 @@ import re
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
-from jarvis.config import COLOR_GRAY, COLOR_RESET
+from jarvis.config import COLOR_GRAY, COLOR_RED, COLOR_RESET
 
 def open_bluetooth_settings() -> str:
     """Opens the system Bluetooth settings screen for pairing or connecting audio devices."""
@@ -44,9 +44,30 @@ def _get_default_adb_target() -> str:
 
 def _set_default_adb_target(target: str):
     try:
+        data = {}
+        if os.path.exists(STATE_FILE):
+            try:
+                with open(STATE_FILE, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        data["default_target"] = target
         with open(STATE_FILE, "w") as f:
-            json.dump({"default_target": target}, f)
+            json.dump(data, f)
     except:
+        pass
+
+def _try_remember_serial_for_target(target: str):
+    """After a successful adb connect, fetches the device's serial number and
+    stores the serial -> target mapping, so future mDNS scans can recognize
+    this same physical device even after its IP/port changes."""
+    try:
+        res = subprocess.run(["adb", "-s", target, "get-serialno"], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, timeout=10)
+        serial = res.stdout.strip()
+        if serial and "unknown" not in serial.lower() and "error" not in serial.lower():
+            _remember_device_serial(serial, target)
+    except Exception:
         pass
 
 def adb_list_devices() -> str:
@@ -77,6 +98,7 @@ def adb_connect(target_ip: str, port: int = 5555) -> str:
     out = result.stdout.strip()
     if "connected to" in out.lower():
         _set_default_adb_target(addr)
+        _try_remember_serial_for_target(addr)
     return out
 
 def adb_disconnect(target_ip: str = "") -> str:
@@ -121,6 +143,17 @@ def adb_pair_device(target_ip: str, pairing_port: int, pairing_code: str) -> str
     if "successfully" not in out.lower() and "paired" not in out.lower():
         return f"Pairing failed: {out}\nDouble-check the code and try again before it expires."
 
+    # Pairing succeeded — try connecting on the standard connect port (usually
+    # different from the pairing port) so we can capture the device serial for
+    # future mDNS-based reconnects.
+    try:
+        connect_res = subprocess.run(["adb", "connect", target_ip], capture_output=True, text=True,
+                                      stdin=subprocess.DEVNULL, timeout=10)
+        if "connected to" in connect_res.stdout.lower():
+            _try_remember_serial_for_target(target_ip)
+    except Exception:
+        pass
+
     return f"✅ Paired with {target_ip} successfully!"
 
 
@@ -136,9 +169,167 @@ def _resolve_target(target_ip: str) -> str:
         return target_ip  # Serial ID like emulator-5554, use as-is
     return target_ip if ':' in target_ip else f'{target_ip}:5555'
 
+
+# --- mDNS-based discovery for previously-paired devices ---
+#
+# Android's wireless debugging advertises itself over mDNS using service types:
+#   _adb._tcp             - legacy TCP mode (adb tcpip <port>)
+#   _adb-tls-pairing._tcp - pairing server active (device showing a 6-digit code)
+#   _adb-tls-connect._tcp - TLS connect server active (already-paired device, ready
+#                           to accept `adb connect`)
+# Instance names are typically "adb-<serial>-<random>", so the device's serial
+# number is embedded in the name and survives IP/port changes — making it the
+# right key to recognize "this is the same phone I paired before", since both
+# the IP and port can change between sessions.
+
+def _remember_device_serial(serial: str, target: str):
+    """Associates a device serial with the IP:port it was last seen at, so future
+    mDNS scans can recognize the same physical device even after its IP or port
+    changes."""
+    try:
+        data = {}
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+        known = data.get("known_serials", {})
+        known[serial] = target
+        data["known_serials"] = known
+        data["default_target"] = target
+        with open(STATE_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+def _get_known_serials() -> dict:
+    """Returns the serial -> last-known-target map of previously paired devices."""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f).get("known_serials", {})
+        except Exception:
+            pass
+    return {}
+
+def _extract_serial_from_instance(instance: str, service_type: str) -> str | None:
+    """Extracts the device serial from an mDNS instance name.
+
+    Per AOSP's adb_wifi.md, the instance name pattern differs by service type:
+      - _adb._tcp:              "adb-<serial>"            (no random suffix)
+      - _adb-tls-connect._tcp:  "adb-<serial>-<random>"   (random suffix appended)
+      - _adb-tls-pairing._tcp:  varies; may have no usable serial at all
+        (the pairing instance name can be e.g. "studio-g@<random>" with no serial)
+
+    Serials can themselves contain hyphens, so we can't just split on the first
+    hyphen — instead we strip the "adb-" prefix and, for service types known to
+    append a random suffix, strip everything after the LAST hyphen instead.
+    """
+    if not instance.startswith("adb-"):
+        return None
+    remainder = instance[len("adb-"):]
+    if "tls-connect" in service_type or "tls-pairing" in service_type:
+        # Random suffix is appended after a final hyphen, e.g. "<serial>-M6yfz4"
+        if "-" in remainder:
+            return remainder.rsplit("-", 1)[0]
+        return remainder
+    # _adb._tcp (legacy TCP mode): no suffix, the remainder IS the serial
+    return remainder
+
+
+def _parse_mdns_services() -> list:
+    """Runs `adb mdns services` and parses each discovered service into a dict:
+    {"instance": str, "serial": str|None, "service_type": str, "target": "ip:port"}.
+    Returns an empty list if mDNS discovery isn't supported/enabled or nothing
+    is currently advertising (this is common — mDNS visibility is inconsistent
+    across devices and adb versions, so callers should treat an empty result as
+    "try the next fallback", not as a hard failure)."""
+    import re as _re
+    try:
+        res = subprocess.run(["adb", "mdns", "services"], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        return []
+
+    services = []
+    for line in res.stdout.splitlines():
+        line = line.strip()
+        if not line or line.lower().startswith("list of discovered"):
+            continue
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        instance, service_type, target = parts
+        # Real adb output includes a trailing dot on the service type, e.g.
+        # "_adb-tls-connect._tcp." — normalize it away so substring/equality
+        # checks elsewhere don't need to special-case it.
+        service_type = service_type.rstrip(".")
+        if not _re.match(r'^[\d.]+:\d+$', target):
+            continue
+        serial = _extract_serial_from_instance(instance, service_type)
+        services.append({
+            "instance": instance,
+            "serial": serial,
+            "service_type": service_type,
+            "target": target,
+        })
+    return services
+
+def _mdns_reconnect(prefer_serial: str = "") -> str:
+    """Attempts to reconnect to a previously-paired device by scanning mDNS for
+    an _adb-tls-connect._tcp announcement, matching on device serial when known.
+    Works regardless of which network/hotspot the device is on, unlike the
+    nmap-based hotspot scan. Returns a human-readable result string; check for
+    the "✅" prefix to confirm success.
+    """
+    services = _parse_mdns_services()
+    if not services:
+        return "No devices currently advertising ADB over mDNS. (mDNS discovery can be inconsistent — try `adb mdns check` to verify it's enabled, or fall back to a hotspot scan.)"
+
+    # Both _adb-tls-connect._tcp (paired, TLS-secured) and the legacy _adb._tcp
+    # (TCP mode, no pairing required) are directly connectable. Note: service_type
+    # is already normalized (no trailing dot) by _parse_mdns_services above.
+    connect_candidates = [s for s in services if "tls-connect" in s["service_type"] or s["service_type"] == "_adb._tcp"]
+    if not connect_candidates:
+        pairing_candidates = [s for s in services if "tls-pairing" in s["service_type"]]
+        if pairing_candidates:
+            return ("Found a device in pairing mode (showing a pairing code), but no "
+                    "already-paired device ready to connect. Use adb_pair_device with the "
+                    "IP/port/code shown on its screen first.")
+        return "mDNS found services, but none were ADB-connectable devices."
+
+    known_serials = _get_known_serials()
+
+    # Prefer an exact serial match (explicitly requested, or any previously-known device)
+    chosen = None
+    if prefer_serial:
+        chosen = next((s for s in connect_candidates if s["serial"] == prefer_serial), None)
+    if not chosen:
+        for s in connect_candidates:
+            if s["serial"] and s["serial"] in known_serials:
+                chosen = s
+                break
+    # No known match — if there's exactly one candidate, use it; otherwise ambiguous.
+    if not chosen:
+        if len(connect_candidates) == 1:
+            chosen = connect_candidates[0]
+        else:
+            names = ", ".join(f"{s['serial'] or s['instance']} ({s['target']})" for s in connect_candidates)
+            return f"Multiple unrecognized devices found via mDNS: {names}. Specify which one to connect to."
+
+    target = chosen["target"]
+    result = subprocess.run(["adb", "connect", target], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    out = result.stdout.strip()
+    if "connected to" in out.lower() or "already connected" in out.lower():
+        _set_default_adb_target(target)
+        if chosen["serial"]:
+            _remember_device_serial(chosen["serial"], target)
+        return f"✅ Reconnected via mDNS to {target} (serial: {chosen['serial'] or 'unknown'})."
+    return f"mDNS found {target} but connection failed: {out}"
+
+
 def _ensure_adb_connected(target: str) -> bool:
     """Checks if the device is already in adb devices. For IP targets, tries to connect if missing.
-    If direct IP connection fails, attempts to run the auto-hotspot reconnect logic to discover a new port."""
+    If direct IP connection fails, tries mDNS discovery (works on any shared network, not just our
+    own hotspot), then finally falls back to the hotspot client scan."""
     import re as _re
     subprocess.run(["adb", "start-server"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
     res = subprocess.run(["adb", "devices"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
@@ -157,25 +348,54 @@ def _ensure_adb_connected(target: str) -> bool:
         if target in line and _re.search(r'\bdevice\b', line):
             return True
 
-    # FALLBACK: If direct connection fails, the IP or port might have changed.
-    # Run hotspot autoconnect to scan and refresh the state.
+    # FALLBACK 1: mDNS discovery. Network-agnostic — works whether the device is
+    # on our hotspot, a home Wi-Fi network, or anywhere else mDNS multicast reaches.
     try:
-        from jarvis.tools.hotspot import hotspot_adb_autoconnect
-        print(f"[ADB Connection Fallback] Connection to {target} failed. Attempting hotspot client scan...")
-        autoconnect_res = hotspot_adb_autoconnect()
-        if "✅ ADB connected to:" in autoconnect_res:
-            # Re-read default target after scan updates the state
+        print(f"{COLOR_GRAY}[ADB Connection Fallback] Connection to {target} failed. Trying mDNS discovery...{COLOR_RESET}")
+        mdns_res = _mdns_reconnect()
+        if mdns_res.startswith("✅"):
             new_target = _get_default_adb_target()
             new_resolved = _resolve_target(new_target)
             res3 = subprocess.run(["adb", "devices"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
             for line in res3.stdout.splitlines():
                 if new_resolved in line and _re.search(r'\bdevice\b', line):
+                    return True
+    except Exception as e:
+        print(f"{COLOR_RED}[ADB Connection Fallback] mDNS reconnect error: {e}{COLOR_RESET}")
+
+    # FALLBACK 2: If mDNS didn't find anything (common — mDNS visibility is
+    # inconsistent), the IP or port might have changed on our own hotspot. Run
+    # hotspot autoconnect to scan and refresh the state.
+    try:
+        from jarvis.tools.hotspot import hotspot_adb_autoconnect
+        print(f"{COLOR_GRAY}[ADB Connection Fallback] mDNS found nothing. Attempting hotspot client scan...{COLOR_RESET}")
+        autoconnect_res = hotspot_adb_autoconnect()
+        if "✅ ADB connected to:" in autoconnect_res:
+            # Re-read default target after scan updates the state
+            new_target = _get_default_adb_target()
+            new_resolved = _resolve_target(new_target)
+            res4 = subprocess.run(["adb", "devices"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            for line in res4.stdout.splitlines():
+                if new_resolved in line and _re.search(r'\bdevice\b', line):
                     # Successfully auto-healed and reconnected!
                     return True
     except Exception as e:
-        print(f"[ADB Connection Fallback] Reconnect error: {e}")
+        print(f"{COLOR_RED}[ADB Connection Fallback] Hotspot reconnect error: {e}{COLOR_RESET}")
 
     return False
+
+
+def adb_mdns_reconnect(prefer_serial: str = "") -> str:
+    """Tool entrypoint: scans mDNS for a previously-paired ADB device and reconnects
+    to it directly, regardless of which network it's currently on. Use this when the
+    user wants to reconnect to a known phone but its IP/port may have changed and it's
+    not on this device's own hotspot (e.g. shared home Wi-Fi instead).
+
+    Args:
+        prefer_serial: optional device serial to target if multiple devices are
+            discoverable at once. Leave blank to auto-pick a previously-known device.
+    """
+    return _mdns_reconnect(prefer_serial)
 
 
 

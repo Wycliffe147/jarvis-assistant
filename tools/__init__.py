@@ -7,7 +7,7 @@ from jarvis.tools.network import open_url, get_wifi_info, scan_wifi, set_wifi, g
 from jarvis.tools.camera import take_photo, analyze_photo, local_ocr
 from jarvis.tools.apps import list_apps, open_app, search_launcher_apps
 from jarvis.tools.link import link_start_server, link_status, link_scan, link_send_message, link_send_command, link_send_file, link_sync_clipboard
-from jarvis.tools.devices_ext import open_bluetooth_settings, adb_connect, adb_disconnect, adb_pair_device, adb_list_devices, adb_command, adb_screenshot, dlna_scan, dlna_cast, dlna_stop
+from jarvis.tools.devices_ext import open_bluetooth_settings, adb_connect, adb_disconnect, adb_pair_device, adb_list_devices, adb_command, adb_screenshot, adb_mdns_reconnect, dlna_scan, dlna_cast, dlna_stop
 from jarvis.tools.hotspot import hotspot_enable, hotspot_disable, hotspot_open_settings, hotspot_status, hotspot_scan_clients, hotspot_adb_autoconnect
 
 
@@ -82,6 +82,7 @@ TOOLS = {
     "adb_list_devices":    adb_list_devices,
     "adb_command":         adb_command,
     "adb_screenshot":      adb_screenshot,
+    "adb_mdns_reconnect":  adb_mdns_reconnect,
     "dlna_scan":           dlna_scan,
     "dlna_cast":           dlna_cast,
     "dlna_stop":           dlna_stop,
@@ -100,7 +101,7 @@ DATA_TOOLS = {
     "get_sensor", "get_current_time", "tts_engines", "show_dialog", "fingerprint_auth",
     "find_music", "find_contact", "analyze_photo", "local_ocr", "list_apps",
     "search_launcher_apps", "web_search", "deep_read", "link_status", "link_scan",
-    "dlna_scan", "adb_list_devices", "adb_pair_device",
+    "dlna_scan", "adb_list_devices", "adb_pair_device", "adb_mdns_reconnect",
     "hotspot_status", "hotspot_scan_clients"
 }
 
@@ -173,6 +174,7 @@ adb_pair_device(target_ip, pairing_port, pairing_code) - Pair a brand new device
 adb_list_devices()               - List all currently connected ADB devices by identifier and model. Always call this first when the user asks to control another phone/device via ADB.
 adb_command(target_ip, action, params_json) - Send a command (tap, swipe, text, keyevent, launch, shell) to ADB target phone. Provide arguments as stringified JSON.
 adb_screenshot(target_ip, filename) - Takes a screenshot of the ADB target device and pulls it to the local Downloads folder.
+adb_mdns_reconnect(prefer_serial) - Reconnects to a previously-paired ADB device by scanning mDNS, regardless of which network it's on (no shared hotspot needed). Use this if adb_command/adb_screenshot fail because the device's IP or port changed and it's not on this phone's own hotspot.
 dlna_scan()                      - Scan the local network for DLNA smart TVs, screens, and speakers.
 dlna_cast(target_ip, media_url, media_title) - Stream audio/video URLs directly to a local smart TV or speaker.
 dlna_stop(target_ip)             - Stop casting/playback on DLNA smart TV or speaker.
