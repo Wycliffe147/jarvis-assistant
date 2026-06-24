@@ -3,24 +3,37 @@ import os
 import json
 from collections import deque
 from datetime import date
-from jarvis.config import API_KEY, URL_CHAT, URL_WHISPER, MODEL_PRIMARY, MODEL_FALLBACK, SYSTEM_PROMPT, COLOR_YELLOW, COLOR_RESET, COLOR_RED
+from jarvis.config import API_KEY, URL_CHAT, URL_WHISPER, MODEL_PRIMARY, MODEL_FALLBACK, SYSTEM_PROMPT, COLOR_YELLOW, COLOR_RESET, COLOR_RED, CEREBRAS_API_KEY, URL_CEREBRAS, MODEL_CEREBRAS_FALLBACK
 from jarvis.tools.media import speak
 from jarvis.tools import TOOLS_DESCRIPTION
 
 active_model = MODEL_PRIMARY
-_primary_exhausted_date = None  # date when primary daily quota was exhausted
+_primary_exhausted_date = None    # date when Groq primary (70b) daily quota was exhausted
+_cerebras_exhausted_date = None   # date when Cerebras (120b, 2nd tier) was also exhausted
 
 
 def _get_model() -> str:
-    """Returns the best available model. Skips primary if its daily quota was
-    exhausted today. Resets automatically the next day when Groq refreshes quota."""
-    global active_model, _primary_exhausted_date
-    if _primary_exhausted_date is not None and _primary_exhausted_date == date.today():
-        return MODEL_FALLBACK
-    # New day has started — reset and try primary again
-    if _primary_exhausted_date is not None and _primary_exhausted_date != date.today():
+    """Returns the best available model. Tries Groq primary (70b) first,
+    then Cerebras (120b, a genuinely separate quota pool, bigger than the
+    Groq fallback) second, then Groq's own fallback (8b) as the absolute
+    last resort -- only reached once BOTH the primary and Cerebras are
+    exhausted today. Each exhaustion flag resets automatically the next day."""
+    global active_model, _primary_exhausted_date, _cerebras_exhausted_date
+    today = date.today()
+
+    if _primary_exhausted_date is not None and _primary_exhausted_date != today:
         active_model = MODEL_PRIMARY
         _primary_exhausted_date = None
+    if _cerebras_exhausted_date is not None and _cerebras_exhausted_date != today:
+        _cerebras_exhausted_date = None
+
+    if _primary_exhausted_date == today and _cerebras_exhausted_date == today:
+        return MODEL_FALLBACK
+    if _primary_exhausted_date == today and CEREBRAS_API_KEY:
+        return MODEL_CEREBRAS_FALLBACK
+    if _primary_exhausted_date == today:
+        # No Cerebras key configured — skip straight to Groq fallback.
+        return MODEL_FALLBACK
     return active_model
 
 
@@ -63,11 +76,33 @@ def _stream_response(r):
             continue
 
 
-def _post(payload, headers, stream):
-    return requests.post(URL_CHAT, headers=headers, json=payload, timeout=20, stream=stream)
+def _apply_gpt_oss_params(payload: dict, model: str):
+    """Sets the right gpt-oss-specific params for whichever provider is
+    serving the model. Cerebras's API supports the standard reasoning_effort
+    parameter but rejects include_reasoning entirely (400: unsupported) --
+    that param is specific to other gpt-oss hosts (e.g. Groq's), not part
+    of Cerebras's API surface."""
+    if "gpt-oss" not in model:
+        return
+    payload["reasoning_effort"] = "low"
+    if model != MODEL_CEREBRAS_FALLBACK:
+        payload["include_reasoning"] = False
 
 
-def _non_streaming_retry(payload, headers):
+def _endpoint_for(model: str) -> tuple[str, dict]:
+    """Returns (url, headers) for the given model. Cerebras is a genuinely
+    separate provider with its own base URL and API key — everything else
+    (Groq primary/fallback) shares Groq's endpoint and key."""
+    if model == MODEL_CEREBRAS_FALLBACK:
+        return URL_CEREBRAS, {"Authorization": f"Bearer {CEREBRAS_API_KEY}", "Content-Type": "application/json"}
+    return URL_CHAT, {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+
+
+def _post(payload, headers, stream, url=URL_CHAT):
+    return requests.post(url, headers=headers, json=payload, timeout=20, stream=stream)
+
+
+def _non_streaming_retry(payload, headers, url=URL_CHAT):
     """Retries the same model non-streaming. Used both when streaming yields
     nothing and when Groq's tool_use_failed bug fires — non-streaming is more
     reliable for surfacing real content on reasoning models, and a plain retry
@@ -75,7 +110,7 @@ def _non_streaming_retry(payload, headers):
     retry_payload = dict(payload)
     retry_payload["stream"] = False
     try:
-        r2 = requests.post(URL_CHAT, headers=headers, json=retry_payload, timeout=20)
+        r2 = requests.post(url, headers=headers, json=retry_payload, timeout=20)
         if r2.status_code == 200:
             text = r2.json()["choices"][0]["message"].get("content", "").strip()
             if text:
@@ -84,7 +119,7 @@ def _non_streaming_retry(payload, headers):
         if _is_tool_use_failed(r2.text):
             # Give it one more shot — this Groq-side bug is often transient.
             try:
-                r3 = requests.post(URL_CHAT, headers=headers, json=retry_payload, timeout=20)
+                r3 = requests.post(url, headers=headers, json=retry_payload, timeout=20)
                 if r3.status_code == 200:
                     text = r3.json()["choices"][0]["message"].get("content", "").strip()
                     return text, True
@@ -97,31 +132,39 @@ def _non_streaming_retry(payload, headers):
 
 
 def call_ai(messages: list, stream: bool = True):
-    global active_model, _primary_exhausted_date
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+    global active_model, _primary_exhausted_date, _fallback_exhausted_date
     model = _get_model()
+    url, headers = _endpoint_for(model)
     payload = {"model": model, "messages": messages, "max_tokens": 800, "stream": stream}
-    if "gpt-oss" in model:
-        # gpt-oss models often route the tool-call / answer text into reasoning_content
-        # instead of content, especially with a long system prompt + tools list.
-        # Forcing low reasoning effort and excluding reasoning from the response keeps
-        # the model focused on emitting the final JSON tool-call / answer in `content`.
-        payload["reasoning_effort"] = "low"
-        payload["include_reasoning"] = False
+    _apply_gpt_oss_params(payload, model)
 
     try:
-        r = _post(payload, headers, stream)
+        r = _post(payload, headers, stream, url=url)
 
         if r.status_code == 429 and model == MODEL_PRIMARY:
-            print(f"{COLOR_YELLOW}[Daily quota exhausted on {MODEL_PRIMARY}, switching to {MODEL_FALLBACK} until midnight UTC]{COLOR_RESET}", flush=True)
             _primary_exhausted_date = date.today()
+            if CEREBRAS_API_KEY:
+                print(f"{COLOR_YELLOW}[Daily quota exhausted on {MODEL_PRIMARY}, switching to Cerebras ({MODEL_CEREBRAS_FALLBACK}) until midnight UTC]{COLOR_RESET}", flush=True)
+                model = MODEL_CEREBRAS_FALLBACK
+                url, headers = _endpoint_for(model)
+                payload["model"] = model
+                _apply_gpt_oss_params(payload, model)
+            else:
+                print(f"{COLOR_YELLOW}[Daily quota exhausted on {MODEL_PRIMARY}, switching to {MODEL_FALLBACK} until midnight UTC]{COLOR_RESET}", flush=True)
+                active_model = MODEL_FALLBACK
+                model = MODEL_FALLBACK
+                url, headers = _endpoint_for(model)
+                payload["model"] = model
+            r = _post(payload, headers, stream, url=url)
+
+        if r.status_code == 429 and model == MODEL_CEREBRAS_FALLBACK:
+            print(f"{COLOR_YELLOW}[Cerebras ({MODEL_CEREBRAS_FALLBACK}) also exhausted, switching to {MODEL_FALLBACK} until midnight UTC]{COLOR_RESET}", flush=True)
+            _cerebras_exhausted_date = date.today()
             active_model = MODEL_FALLBACK
             model = MODEL_FALLBACK
+            url, headers = _endpoint_for(model)
             payload["model"] = model
-            if "gpt-oss" in model:
-                payload["reasoning_effort"] = "low"
-                payload["include_reasoning"] = False
-            r = _post(payload, headers, stream)
+            r = _post(payload, headers, stream, url=url)
 
         if r.status_code == 400 and _is_tool_use_failed(r.text):
             # Groq-side bug: it attaches an implicit tool schema and then rejects
@@ -129,7 +172,7 @@ def call_ai(messages: list, stream: bool = True):
             # `tools`). A plain retry, or falling back to non-streaming, usually
             # gets a clean response.
             print(f"{COLOR_RED}[Groq tool_use_failed glitch on {model}, retrying...]{COLOR_RESET}")
-            text, ok = _non_streaming_retry(payload, headers)
+            text, ok = _non_streaming_retry(payload, headers, url=url)
             yield text, ok
             return
 
@@ -144,7 +187,7 @@ def call_ai(messages: list, stream: bool = True):
                 yield text, ok
             if not yielded_anything:
                 print(f"{COLOR_RED}[Warning: streaming returned empty response from {model}. Retrying non-streaming...]{COLOR_RESET}")
-                text, ok = _non_streaming_retry(payload, headers)
+                text, ok = _non_streaming_retry(payload, headers, url=url)
                 yield text, ok
         else:
             text = r.json()["choices"][0]["message"]["content"].strip()

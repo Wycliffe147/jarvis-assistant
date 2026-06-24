@@ -11,6 +11,7 @@ from jarvis.tools.devices_ext import open_bluetooth_settings, adb_connect, adb_d
 from jarvis.tools.hotspot import hotspot_enable, hotspot_disable, hotspot_open_settings, hotspot_status, hotspot_scan_clients, hotspot_adb_autoconnect
 from jarvis.tools.ui_inspect import ui_dump, ui_find_text
 from jarvis.tools.notifications import list_notifications, get_latest_notification
+from jarvis.tools.app_settings import get_battery_diagnostics, get_system_setting, set_system_setting, get_app_info, clear_app_data
 
 
 
@@ -100,6 +101,11 @@ TOOLS = {
     "ui_find_text":        ui_find_text,
     "list_notifications":  list_notifications,
     "get_latest_notification": get_latest_notification,
+    "get_battery_diagnostics": get_battery_diagnostics,
+    "get_system_setting":  get_system_setting,
+    "set_system_setting":  set_system_setting,
+    "get_app_info":        get_app_info,
+    "clear_app_data":      clear_app_data,
 }
 
 DATA_TOOLS = {
@@ -186,6 +192,11 @@ ui_dump(target_ip, only_interactive) - READ-ONLY. Lists the text labels and butt
 ui_find_text(query, target_ip) - READ-ONLY. Checks whether a specific label/button is currently visible on screen (e.g. "is there a Save button"), case-insensitive partial match. Does NOT tap or interact — for that, use adb_command instead.
 list_notifications(target_ip, app_filter, limit) - READ-ONLY. Lists currently-posted notifications (app, title, text), most recent first. Does NOT dismiss, open, or reply to any notification. app_filter is an optional partial package name (e.g. "whatsapp") to narrow results; limit defaults to 10.
 get_latest_notification(target_ip, app_filter) - READ-ONLY. Returns just the single most recent notification, optionally filtered to one app (e.g. "what's my last WhatsApp message"). Does NOT dismiss, open, or reply to it.
+get_battery_diagnostics(target_ip) - READ-ONLY. Deeper battery info than get_battery_status: voltage, charge current, technology, health. Use for "why is my battery draining" type questions.
+get_system_setting(key, namespace, target_ip) - READ-ONLY. Reads one exact Android system setting by key (namespace: system/secure/global, defaults to system). Use before set_system_setting if the current value or exact key name is uncertain.
+set_system_setting(key, value, namespace, target_ip) - Writes exactly ONE named system setting to exactly ONE given value (e.g. key="screen_off_timeout" value="30000" for 30 seconds). Does not touch any other setting. namespace defaults to "system".
+get_app_info(package, target_ip) - READ-ONLY. Returns version, install/update dates, and granted permissions for ONE named installed package (exact package id, e.g. "com.whatsapp"). Use search_launcher_apps first if only the display name is known.
+clear_app_data(package, target_ip) - Clears cache AND data for exactly ONE named installed package (like Settings > Apps > [App] > Storage > Clear Data). Logs the app out and resets it to fresh-install state. Does NOT uninstall. Requires exact package id — use search_launcher_apps first if only the display name is known. Confirm with the user before calling this, since it is destructive to that app's local data.
 adb_mdns_reconnect(prefer_serial) - Reconnects to a previously-paired ADB device by scanning mDNS, regardless of which network it's on (no shared hotspot needed). Use this if adb_command/adb_screenshot fail because the device's IP or port changed and it's not on this phone's own hotspot.
 adb_mirror_device(target_ip, orientation) - Opens a LIVE interactive mirror of the connected phone's screen in a Termux:X11 window using scrcpy. Use this for "mirror", "screen mirror", "show me the other phone's screen", "let me control it directly" — NOT adb_screenshot, which only takes a single static image. Tapping/swiping the window controls the target phone like a normal touchscreen, no extra setup needed. orientation defaults to "portrait".
 adb_stop_mirror() - Closes the currently running screen mirror session.

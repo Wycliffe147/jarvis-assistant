@@ -56,7 +56,12 @@ def classify_local_intent(text: str):
         return "set_volume", {"stream": "music", "volume": 0}, "Volume muted."
 
     # --- Battery ---
-    if any(x in t for x in ["battery", "charge", "percentage"]):
+    # Simple level/status checks are fast-pathed. Diagnostic/analytical
+    # phrasing ("why is my battery draining", "what's draining my battery")
+    # needs LLM reasoning over deeper data, so it falls through instead of
+    # being short-circuited to the raw status dump.
+    is_diagnostic_phrasing = any(p in t for p in ["why", "drain", "draining", "what's using", "what is using"])
+    if any(x in t for x in ["battery", "charge", "percentage"]) and not is_diagnostic_phrasing:
         return "get_battery_status", {}, "Checking battery status..."
 
     # --- Location ---

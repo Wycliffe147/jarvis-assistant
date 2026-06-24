@@ -5,6 +5,7 @@ load_dotenv()
 
 # --- API Keys ---
 API_KEY = os.getenv("GROQ_API_KEY")
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")  # optional third-tier fallback
 
 if not API_KEY:
     print("Error: GROQ_API_KEY not found in .env file.")
@@ -22,8 +23,9 @@ AUDIO_FILE        = "/sdcard/voice_input.wav"
 
 # --- API config ---
 MAX_HISTORY = 6
-URL_CHAT    = "https://api.groq.com/openai/v1/chat/completions"
-URL_WHISPER = "https://api.groq.com/openai/v1/audio/transcriptions"
+URL_CHAT     = "https://api.groq.com/openai/v1/chat/completions"
+URL_WHISPER  = "https://api.groq.com/openai/v1/audio/transcriptions"
+URL_CEREBRAS = "https://api.cerebras.ai/v1/chat/completions"
 
 MODEL_PRIMARY  = "llama-3.3-70b-versatile"
 # llama-3.1-8b-instant: fast, non-reasoning, follows the raw-JSON tool-call protocol
@@ -36,6 +38,15 @@ MODEL_PRIMARY  = "llama-3.3-70b-versatile"
 # replies, never JSON tool-calls or result scaffolding.
 MODEL_FALLBACK = "llama-3.1-8b-instant"
 MODEL_VISION   = "meta-llama/llama-4-scout-17b-16e-instruct"
+# Second tier: a genuinely separate provider/quota pool, used once the Groq
+# primary (70b) is exhausted for the day. Bigger than MODEL_FALLBACK (120B
+# vs 8B), and Cerebras's own docs recommend it for agentic/tool-use
+# workloads on their free public endpoint. Shares the same "gpt-oss" branch
+# in call_ai() for reasoning_effort/include_reasoning handling.
+# MODEL_FALLBACK (Groq 8b) becomes the absolute last resort, only reached
+# once BOTH the Groq primary AND Cerebras are exhausted the same day (or if
+# no CEREBRAS_API_KEY is configured at all).
+MODEL_CEREBRAS_FALLBACK = "gpt-oss-120b"
 
 # --- Groq Vision config ---
 VISION_MAX_PX     = 800    # Optimized: High enough for text/detail, small enough for speed
@@ -86,6 +97,8 @@ SYSTEM_PROMPT = (
     'MUSIC RULE: ALWAYS call find_music first with a relevant query, then play_media.\n'
     'APP MANAGEMENT RULE: If the user wants to open an application and you do not know its explicit package identifier string, ALWAYS call search_launcher_apps first with a keyword matching the target app name. Do not guess raw package names.\n'
     'ACKNOWLEDGMENT RULE: For any task that involves searching, complex processing, or multi-step tool calls, you MUST call the "speak" tool as your very first action to acknowledge the request (e.g., "Searching for that now...", "Let me look that up...", "One moment, checking your contacts..."). This ensures the user knows you are working on it.\n'
+    'ACCURACY RULE: When a tool result is present in context (including in a "Tool result for X: ..." feedback line), your final spoken summary MUST use the exact value(s) from that result. NEVER invent, alter, round in a misleading way, or substitute a different number/name/value than what the tool actually returned. If a tool failed, errored, or returned nothing useful, say so plainly (e.g. "I wasn\'t able to get that") instead of speaking a made-up answer. If a tool you would need does not exist, say that directly instead of calling a different tool and presenting its result as if it answered the original question.\n'
+    'FRESHNESS RULE: Earlier turns in this conversation may mention values (settings, statuses, numbers) that have since changed — the user may have changed them, or you may have been testing. Only the tool result from THIS turn is authoritative. Never answer using a number or value you only saw in a previous turn\'s reply; if this turn did not produce a fresh result for what\'s being asked, call the appropriate tool again rather than reusing an old answer.\n'
     'TRANSPORT CONTROLS: Use next_track, previous_track, pause_media, or stop_media directly.\n'
     'CALLING RULE: Never call make_call with a name — use find_contact first. '
     'If find_contact returns multiple matching numbers, list choices via speak and ask to clarify.\n'
