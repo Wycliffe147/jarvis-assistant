@@ -249,7 +249,14 @@ def handle_response(response_gen, history: deque, messages: list, _depth: int = 
     data_results = [t for t in tool_outputs if t["tool"] in DATA_TOOLS]
     if data_results and _depth < 3:
         print(f"\n{COLOR_GRAY}[Analyzing data results...]{COLOR_RESET}")
-        feedback = "\n".join(f"Tool result for {t['tool']}: {t['result']}" for t in data_results)
+        # Forward ALL tool results from this turn, not just the DATA_TOOLS
+        # ones. Otherwise, if a turn calls e.g. adb_list_devices (a data
+        # tool) alongside something like get_latest_notification (not a
+        # data tool), this follow-up pass would only see the ADB device
+        # list and lose the actual notification result -- forcing the
+        # model to either guess or blindly re-call the other tool with no
+        # memory of what it already found.
+        feedback = "\n".join(f"Tool result for {t['tool']}: {t['result']}" for t in tool_outputs)
         followup_messages = messages + [
             {"role": "assistant", "content": full_text},
             {
