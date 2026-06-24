@@ -20,13 +20,60 @@ def list_apps(search_query: str = "") -> str:
         
     return "\n".join(packages[:20])
 
+def _get_foreground_package() -> str:
+    """Returns the package name of the app currently in the foreground, or '' on failure."""
+    try:
+        res = subprocess.run(
+            ["adb", "shell", "dumpsys", "window", "windows"],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
+        )
+        for line in res.stdout.splitlines():
+            if "mCurrentFocus" in line and "Window{" in line:
+                token = line.strip().split()[-1].rstrip("}")
+                return token.split("/")[0]
+    except Exception:
+        pass
+    return ""
+
+
+def _wait_for_app_ready(package_name: str, timeout: float = 6.0, poll_interval: float = 0.4) -> str | None:
+    """Polls until the target package is in the foreground AND the UI tree has
+    rendered meaningful content. Returns a ui_dump snapshot when ready, or None on timeout.
+    All calls are local ADB — no API calls consumed.
+    """
+    import time
+    from jarvis.tools.ui_inspect import ui_dump
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        fg = _get_foreground_package()
+        if fg == package_name:
+            snapshot = ui_dump(only_interactive=False)
+            is_termux_shell = "terminal_toolbar" in snapshot or "ESC" in snapshot[:200]
+            has_content = snapshot.startswith("Found") and not is_termux_shell
+            element_count = 0
+            if has_content:
+                try:
+                    element_count = int(snapshot.split("Found")[1].split("element")[0].strip())
+                except Exception:
+                    pass
+            if has_content and element_count >= 3:
+                return snapshot
+        time.sleep(poll_interval)
+    return None
+
+
 def open_app(package_name: str) -> str:
-    """Launches an app using target-explicit component selection checking via -n."""
+    """Launches an app and waits until it has fully rendered before returning.
+    Returns a ui_dump snapshot of the initial screen so the model can act
+    immediately — no separate ui_dump call needed.
+    """
     if " → " in package_name:
         package_name = package_name.split(" → ")[-1].strip()
 
     package_name = package_name.strip()
     activity_cache = _load_activity_cache()
+    launched = False
 
     # Hit 1: Explicitly Saved Cache Match
     if package_name in activity_cache:
@@ -34,47 +81,55 @@ def open_app(package_name: str) -> str:
         result = subprocess.run(["am", "start", "-n", target_component], capture_output=True, text=True, stdin=subprocess.DEVNULL)
         output = (result.stdout + result.stderr).strip()
         if "Error" not in output and "Exception" not in output and "unable to resolve" not in output.lower():
-            return f"Opened {package_name} via cached structural entry point."
+            launched = True
 
     # Hit 2: Pattern Brute-Force Probing Loop
-    print(f"{COLOR_GRAY}[Probing activity matrix for execution paths inside '{package_name}'...]{COLOR_RESET}")
-    
-    patterns = [
-        "MainActivity",
-        "Main",
-        "SplashActivity",
-        "HomeActivity",
-        "LauncherActivity",
-        "app.MainActivity",
-        "app.TermuxActivity",
-        "ui.MainActivity",
-        "ui.LauncherActivity"
-    ]
+    if not launched:
+        print(f"{COLOR_GRAY}[Probing activity matrix for execution paths inside '{package_name}'...]{COLOR_RESET}")
 
-    for suffix in patterns:
-        # Test 1: Absolute layout path structure
-        candidate = f"{package_name}.{suffix}" if not suffix.startswith(package_name) else suffix
-        print(f"{COLOR_GRAY}[Probing Component: {package_name}/{candidate}]{COLOR_RESET}", end="\r")
-        
-        res = subprocess.run(["am", "start", "-n", f"{package_name}/{candidate}"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
-        out = (res.stdout + res.stderr).strip()
-        
-        if "Error" not in out and "Exception" not in out and "unable to resolve" not in out.lower():
-            activity_cache[package_name] = candidate
-            _save_activity_cache(activity_cache)
-            return f"Successfully opened {package_name} using matching pattern class: {candidate}"
-        
-        # Test 2: Inverted short class context binding
-        if "." in suffix:
-            short_candidate = f".{suffix.split('.')[-1]}"
-            res = subprocess.run(["am", "start", "-n", f"{package_name}/{short_candidate}"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        patterns = [
+            "MainActivity", "Main", "SplashActivity", "HomeActivity", "LauncherActivity",
+            "app.MainActivity", "app.TermuxActivity", "ui.MainActivity", "ui.LauncherActivity"
+        ]
+
+        for suffix in patterns:
+            candidate = f"{package_name}.{suffix}" if not suffix.startswith(package_name) else suffix
+            print(f"{COLOR_GRAY}[Probing Component: {package_name}/{candidate}]{COLOR_RESET}", end="\r")
+
+            res = subprocess.run(["am", "start", "-n", f"{package_name}/{candidate}"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
             out = (res.stdout + res.stderr).strip()
-            if "Error" not in out and "Exception" not in out and "unable to resolve" not in out.lower():
-                activity_cache[package_name] = short_candidate
-                _save_activity_cache(activity_cache)
-                return f"Successfully opened {package_name} using short pattern class: {short_candidate}"
 
-    return f"Failed to execute structural launch mapping on {package_name}. Component configuration unresolvable."
+            if "Error" not in out and "Exception" not in out and "unable to resolve" not in out.lower():
+                activity_cache[package_name] = candidate
+                _save_activity_cache(activity_cache)
+                launched = True
+                break
+
+            if "." in suffix:
+                short_candidate = f".{suffix.split('.')[-1]}"
+                res = subprocess.run(["am", "start", "-n", f"{package_name}/{short_candidate}"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                out = (res.stdout + res.stderr).strip()
+                if "Error" not in out and "Exception" not in out and "unable to resolve" not in out.lower():
+                    activity_cache[package_name] = short_candidate
+                    _save_activity_cache(activity_cache)
+                    launched = True
+                    break
+
+    if not launched:
+        return f"Failed to launch {package_name}: no matching activity found."
+
+    print(f"{COLOR_GRAY}[Waiting for {package_name} to render...]{COLOR_RESET}")
+    snapshot = _wait_for_app_ready(package_name)
+
+    if snapshot:
+        return (
+            f"App ready. Current screen state (no need to call ui_dump again):\n{snapshot}"
+        )
+
+    return (
+        f"Launched {package_name} but it has not fully rendered yet. "
+        f"Call ui_dump once to check the current screen state before acting."
+    )
 
 def search_launcher_apps(query: str) -> str:
     """Resolve app package name from query using known-packages table + cmd package list fallback."""

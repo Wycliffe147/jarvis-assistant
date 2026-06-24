@@ -9,7 +9,7 @@ from jarvis.tools.apps import list_apps, open_app, search_launcher_apps
 from jarvis.tools.link import link_start_server, link_status, link_scan, link_send_message, link_send_command, link_send_file, link_sync_clipboard
 from jarvis.tools.devices_ext import open_bluetooth_settings, adb_connect, adb_disconnect, adb_pair_device, adb_list_devices, adb_command, adb_screenshot, adb_mdns_reconnect, adb_mirror_device, adb_stop_mirror, dlna_scan, dlna_cast, dlna_stop
 from jarvis.tools.hotspot import hotspot_enable, hotspot_disable, hotspot_open_settings, hotspot_status, hotspot_scan_clients, hotspot_adb_autoconnect
-from jarvis.tools.ui_inspect import ui_dump, ui_find_text
+from jarvis.tools.ui_inspect import ui_dump, ui_find_text, input_my_screen
 from jarvis.tools.notifications import list_notifications, get_latest_notification
 from jarvis.tools.app_settings import get_battery_diagnostics, get_system_setting, set_system_setting, get_app_info, clear_app_data
 
@@ -101,6 +101,7 @@ TOOLS = {
     "hotspot_adb_autoconnect": hotspot_adb_autoconnect,
     "ui_dump":             ui_dump,
     "ui_find_text":        ui_find_text,
+    "input_my_screen":     input_my_screen,
     "list_notifications":  list_notifications,
     "get_latest_notification": get_latest_notification,
     "get_battery_diagnostics": get_battery_diagnostics,
@@ -156,7 +157,7 @@ read_my_screen(prompt)           - Captures a screenshot of THIS phone's current
 ocr_my_screen()                  - Captures a screenshot of THIS phone's screen and extracts text via Tesseract OCR. Offline, instant, no API call. Prefer over read_my_screen when the goal is raw text extraction (e.g. "read the text on my screen", "copy this", "what does that say") rather than understanding context or layout.
 list_apps(search_query)          - List third party installed app package identifiers via 'cmd package list'.
 search_launcher_apps(query)      - Fast checks or sweeps system package listings to translate plain app names (e.g. 'YouTube') into verified package strings. Always call this first when an explicit package identifier isn't known.
-open_app(package_name)           - Launch an installed application utilizing an internal intent-directed trigger.
+open_app(package_name)           - Launch an app and wait for it to fully render. Returns the initial screen state (ui_dump snapshot) so you can act immediately — do NOT call ui_dump again right after open_app, the screen state is already in the response.
 find_music(query, refresh_cache) - Search for audio files across internal storage.
 play_media(file)                 - Open and play a file in Muso Music Player (requires full path).
 pause_media()                    - Toggle play/pause in the active media session
@@ -194,6 +195,7 @@ adb_command(target_ip, action, params_json) - Send a command (tap, swipe, text, 
 adb_screenshot(target_ip, filename) - Takes a screenshot of the ADB target device and pulls it to the local Downloads folder.
 ui_dump(target_ip, only_interactive) - READ-ONLY. Lists the text labels and buttons currently visible on screen (with positions), e.g. for "what's on screen", "what buttons are visible", "list clickable elements". Does NOT tap, type, or interact in any way — for that, use adb_command instead. only_interactive defaults to True (buttons/links only); set False to also see static text.
 ui_find_text(query, target_ip) - READ-ONLY. Checks whether a specific label/button is currently visible on screen (e.g. "is there a Save button"), case-insensitive partial match. Does NOT tap or interact — for that, use adb_command instead.
+input_my_screen(action, params_json) - Sends touch/keyboard input to THIS phone's screen. Actions: tap {x,y}, swipe {x1,y1,x2,y2,duration_ms}, text {text}, keyevent {code}, long_press {x,y,duration_ms}, shell {cmd}. Use coordinates from ui_dump's bounds. Combine with ui_dump/read_my_screen to navigate any app: read → decide → tap → read again → repeat. Key codes: 3=Home, 4=Back, 26=Power, 66=Enter, 67=Backspace, 187=Recents.
 list_notifications(target_ip, app_filter, limit) - READ-ONLY. Lists currently-posted notifications (app, title, text), most recent first. Does NOT dismiss, open, or reply to any notification. app_filter is an optional partial package name (e.g. "whatsapp") to narrow results; limit defaults to 10.
 get_latest_notification(target_ip, app_filter) - READ-ONLY. Returns just the single most recent notification, optionally filtered to one app (e.g. "what's my last WhatsApp message"). Does NOT dismiss, open, or reply to it.
 get_battery_diagnostics(target_ip) - READ-ONLY. Deeper battery info than get_battery_status: voltage, charge current, technology, health. Use for "why is my battery draining" type questions.

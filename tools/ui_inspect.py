@@ -167,3 +167,101 @@ def ui_find_text(query: str, target_ip: str = "") -> str:
         state = "clickable" if el["clickable"] else "not clickable"
         lines.append(f"  - {descriptor}, {state}, at {el['bounds']}")
     return "\n".join(lines)
+
+
+def input_my_screen(action: str = "tap", params_json: str = "{}") -> str:
+    """Sends touch/keyboard input to THIS phone's screen via ADB.
+
+    This is the host-device counterpart to adb_command — same actions, same
+    params format, but always targets this phone. Use after ui_dump or
+    read_my_screen to act on what Jarvis sees. Combine them to navigate any
+    app autonomously: read → decide → tap → read again → repeat.
+
+    Actions:
+      tap        {\"x\": int, \"y\": int}
+                 Tap a pixel coordinate. Get coordinates from ui_dump's
+                 \"at [x1,y1][x2,y2]\" bounds — use the centre of the range.
+
+      swipe      {\"x1\": int, \"y1\": int, \"x2\": int, \"y2\": int, \"duration_ms\": int}
+                 Swipe between two points. duration_ms controls speed
+                 (default 300). Use for scrolling, pull-to-refresh, sliders.
+
+      text       {\"text\": str}
+                 Type text into the focused field. Tap the field first.
+                 Spaces are handled automatically.
+
+      keyevent   {\"code\": int}
+                 Send a hardware key. Common codes:
+                   3 = Home, 4 = Back, 24 = Volume Up, 25 = Volume Down,
+                   26 = Power/Screen, 66 = Enter, 187 = Recents,
+                   111 = Escape, 67 = Backspace
+
+      long_press {\"x\": int, \"y\": int, \"duration_ms\": int}
+                 Long-press at a coordinate (default 800ms). Use for
+                 context menus, drag handles, text selection.
+
+      shell      {\"cmd\": str}
+                 Run an arbitrary adb shell command on this device.
+                 Use sparingly — prefer the typed actions above.
+    """
+    import json
+
+    try:
+        params = json.loads(params_json)
+    except Exception as e:
+        return f"Invalid params_json: {e}"
+
+    target = _resolve_local_target()
+    if not target:
+        return (
+            "Could not establish a local ADB link. "
+            "Make sure Wireless Debugging is enabled in Developer Options."
+        )
+
+    adb_base = ["adb", "-s", target, "shell"]
+
+    if action == "tap":
+        x = params.get("x", 0)
+        y = params.get("y", 0)
+        cmd = adb_base + ["input", "tap", str(x), str(y)]
+
+    elif action == "swipe":
+        x1 = params.get("x1", 0)
+        y1 = params.get("y1", 0)
+        x2 = params.get("x2", 0)
+        y2 = params.get("y2", 0)
+        dur = params.get("duration_ms", 300)
+        cmd = adb_base + ["input", "swipe", str(x1), str(y1), str(x2), str(y2), str(dur)]
+
+    elif action == "text":
+        txt = params.get("text", "")
+        # adb input text treats spaces literally only when quoted correctly;
+        # replacing with %s is the reliable cross-shell approach.
+        txt_escaped = txt.replace(" ", "%s")
+        cmd = adb_base + ["input", "text", txt_escaped]
+
+    elif action == "keyevent":
+        code = params.get("code", 3)
+        cmd = adb_base + ["input", "keyevent", str(code)]
+
+    elif action == "long_press":
+        x = params.get("x", 0)
+        y = params.get("y", 0)
+        dur = params.get("duration_ms", 800)
+        # long-press = swipe from the same point to itself with a long duration
+        cmd = adb_base + ["input", "swipe", str(x), str(y), str(x), str(y), str(dur)]
+
+    elif action == "shell":
+        shell_cmd = params.get("cmd", "")
+        cmd = adb_base + shell_cmd.split()
+
+    else:
+        return (
+            f"Unknown action '{action}'. "
+            "Valid actions: tap, swipe, text, keyevent, long_press, shell."
+        )
+
+    res = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    if res.returncode == 0:
+        return f"input_my_screen: {action} executed successfully."
+    return f"input_my_screen failed: {res.stderr.strip() or res.stdout.strip()}"
