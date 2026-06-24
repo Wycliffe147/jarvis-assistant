@@ -4,7 +4,7 @@ from jarvis.tools.media import speak, tts_engines, set_volume, get_volume, play_
 from jarvis.tools.comms import send_sms, list_sms, get_call_log, get_contacts, find_contact, make_call, open_dialer
 from jarvis.tools.system import get_clipboard, set_clipboard, show_notification, remove_notification, set_wallpaper, show_dialog, fingerprint_auth, show_toast, share
 from jarvis.tools.network import open_url, get_wifi_info, scan_wifi, set_wifi, get_location, get_device_info, get_cell_info, search_nearby, web_search, deep_read
-from jarvis.tools.camera import take_photo, analyze_photo, local_ocr, read_my_screen, ocr_my_screen
+from jarvis.tools.camera import take_photo, analyze_photo, local_ocr, read_my_screen, ocr_my_screen, screenshot_my_screen
 from jarvis.tools.apps import list_apps, open_app, search_launcher_apps
 from jarvis.tools.link import link_start_server, link_status, link_scan, link_send_message, link_send_command, link_send_file, link_sync_clipboard
 from jarvis.tools.devices_ext import open_bluetooth_settings, adb_connect, adb_disconnect, adb_pair_device, adb_list_devices, adb_command, adb_screenshot, adb_mdns_reconnect, adb_mirror_device, adb_stop_mirror, dlna_scan, dlna_cast, dlna_stop
@@ -49,6 +49,7 @@ TOOLS = {
     "local_ocr":           local_ocr,
     "read_my_screen":      read_my_screen,
     "ocr_my_screen":       ocr_my_screen,
+    "screenshot_my_screen": screenshot_my_screen,
     "list_apps":           list_apps,
     "open_app":            open_app,
     "search_launcher_apps": search_launcher_apps,
@@ -155,6 +156,7 @@ analyze_photo(prompt, camera)    - Take a picture and analyze it visually using 
 local_ocr(camera)                - Snaps a frame and extracts text instantly offline using Tesseract. ALWAYS use this instead of analyze_photo when the user asks to "read this", "OCR", "read text", "extract writing", or ask what a specific piece of paper, book page, or sign says.
 read_my_screen(prompt)           - Captures a screenshot of THIS phone's current screen and sends it to the vision model. Use for "what's on my screen?", "what am I looking at?", "read this page", "what does this error say?", or any question about screen content that goes beyond button listing. Sees rendered pixels — canvas, web views, PDFs, images, video frames — that ui_dump cannot introspect.
 ocr_my_screen()                  - Captures a screenshot of THIS phone's screen and extracts text via Tesseract OCR. Offline, instant, no API call. Prefer over read_my_screen when the goal is raw text extraction (e.g. "read the text on my screen", "copy this", "what does that say") rather than understanding context or layout.
+screenshot_my_screen()           - Captures a screenshot of THIS phone's screen and saves it to /sdcard/DCIM/jarvis/ with an automatic timestamp filename. Use when the user says "take a screenshot", "capture my screen", "save what's on screen". No arguments — filename is always timestamp-based.
 list_apps(search_query)          - List third party installed app package identifiers via 'cmd package list'.
 search_launcher_apps(query)      - Fast checks or sweeps system package listings to translate plain app names (e.g. 'YouTube') into verified package strings. Always call this first when an explicit package identifier isn't known.
 open_app(package_name)           - Launch an app and wait for it to fully render. Returns the initial screen state (ui_dump snapshot) so you can act immediately — do NOT call ui_dump again right after open_app, the screen state is already in the response.

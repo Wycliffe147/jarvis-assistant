@@ -202,3 +202,27 @@ def ocr_my_screen() -> str:
         return "OCR found no readable text on the current screen."
 
     return f"Text extracted from screen: {extracted_text}"
+
+
+SCREENSHOT_DIR = "/sdcard/DCIM/jarvis"
+
+def screenshot_my_screen() -> str:
+    """Captures a screenshot of THIS phone's screen and saves it to
+    /sdcard/DCIM/jarvis/ with a timestamp filename (e.g. screenshot_20260624_153042.png).
+    Use when the user asks to 'take a screenshot', 'capture my screen', 'save what's on screen'.
+    """
+    import time as _time
+
+    os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+
+    timestamp = _time.strftime("%Y%m%d_%H%M%S")
+    filename = f"screenshot_{timestamp}.png"
+    output_path = os.path.join(SCREENSHOT_DIR, filename)
+
+    print(f"{COLOR_GRAY}[Capturing screenshot to {output_path}...]{COLOR_RESET}")
+    saved = _local_screencap(output_path)
+
+    if not saved:
+        return "Screenshot failed: could not capture the screen via local ADB."
+
+    return f"Screenshot saved to {output_path} (in DCIM/jarvis — NOT in Downloads). Tell the user the exact path: {output_path}"
