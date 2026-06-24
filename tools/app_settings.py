@@ -33,11 +33,40 @@ def _resolve_local_target(target_ip: str = "") -> str | None:
 
 # --- Battery diagnostics ---
 
+_HEALTH_CODES = {
+    "1": "Unknown",
+    "2": "Good",
+    "3": "Overheat",
+    "4": "Dead",
+    "5": "Over voltage",
+    "6": "Unspecified failure",
+    "7": "Cold",
+}
+
+_STATUS_CODES = {
+    "1": "Unknown",
+    "2": "Charging",
+    "3": "Discharging",
+    "4": "Not charging",
+    "5": "Full",
+}
+
+_PLUGGED_CODES = {
+    "0": "Not plugged in",
+    "1": "AC charger",
+    "2": "USB",
+    "4": "Wireless",
+}
+
+
 def get_battery_diagnostics(target_ip: str = "") -> str:
-    """READ-ONLY. Returns deeper battery diagnostics than the basic battery
-    status tool: voltage, charge current, technology, and health, plus
-    whether the device thinks it's currently discharging due to high usage.
-    Use this for "why is my battery draining" type questions.
+    """READ-ONLY. Returns deeper battery STATE info than the basic battery
+    status tool: voltage, charge current, technology, and health. This does
+    NOT identify what is consuming power -- Android's dumpsys battery has
+    no per-app usage data. For "why is my battery draining" questions, this
+    can report the battery's physical state but cannot name a cause; the
+    person should be pointed to Settings > Battery > Battery usage on the
+    device itself for an app-level breakdown.
 
     Args:
         target_ip: ADB target to inspect. Leave blank to use the default device.
@@ -60,22 +89,49 @@ def get_battery_diagnostics(target_ip: str = "") -> str:
             key, _, value = line.partition(":")
             fields[key.strip()] = value.strip()
 
-    wanted = [
-        ("level", "Battery level (%)"),
-        ("voltage", "Voltage (mV)"),
-        ("temperature", "Temperature (tenths of °C)"),
-        ("technology", "Battery technology"),
-        ("health", "Health"),
-        ("status", "Charging status"),
-        ("plugged", "Plugged in (0=no, 1=AC, 2=USB, 4=wireless)"),
-        ("Max charging current", "Max charging current (µA)"),
-        ("Max charging voltage", "Max charging voltage (µV)"),
-    ]
-
     lines = ["Battery diagnostics:"]
-    for key, label in wanted:
-        if key in fields:
-            lines.append(f"  - {label}: {fields[key]}")
+
+    if "level" in fields:
+        lines.append(f"  - Battery level: {fields['level']}%")
+
+    if "voltage" in fields:
+        try:
+            mv = int(fields["voltage"])
+            # dumpsys reports voltage in millivolts. ~3700-3900mV is normal
+            # mid-range for a Li-ion phone battery; ~4200mV is near full;
+            # below ~3500mV is low. Surfacing it in volts (not "high"/"low"
+            # editorializing here) avoids the model inventing its own
+            # interpretation of whether a given mV reading is normal.
+            lines.append(f"  - Voltage: {mv / 1000:.3f} V")
+        except ValueError:
+            lines.append(f"  - Voltage (raw): {fields['voltage']}")
+
+    if "temperature" in fields:
+        try:
+            tenths_c = int(fields["temperature"])
+            lines.append(f"  - Temperature: {tenths_c / 10:.1f}°C")
+        except ValueError:
+            pass
+
+    if "technology" in fields:
+        lines.append(f"  - Battery technology: {fields['technology']}")
+
+    if "health" in fields:
+        health_label = _HEALTH_CODES.get(fields["health"], f"Unrecognized code ({fields['health']})")
+        lines.append(f"  - Health: {health_label}")
+
+    if "status" in fields:
+        status_label = _STATUS_CODES.get(fields["status"], f"Unrecognized code ({fields['status']})")
+        lines.append(f"  - Charging status: {status_label}")
+
+    if "plugged" in fields:
+        plugged_label = _PLUGGED_CODES.get(fields["plugged"], f"Unrecognized code ({fields['plugged']})")
+        lines.append(f"  - Power source: {plugged_label}")
+
+    if "Max charging current" in fields:
+        lines.append(f"  - Max charging current: {fields['Max charging current']} µA")
+    if "Max charging voltage" in fields:
+        lines.append(f"  - Max charging voltage: {fields['Max charging voltage']} µV")
 
     if len(lines) == 1:
         return "Battery diagnostics command ran, but no recognizable fields were found."

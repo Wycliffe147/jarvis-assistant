@@ -8,6 +8,87 @@ from jarvis.ai import call_ai, build_messages
 from jarvis.history import load_persistent_history, save_persistent_history
 from jarvis.cache.activity_cache import _load_activity_cache, _save_activity_cache
 
+# --- Forced-refresh diagnostic queries ---
+#
+# These phrases map to a tool that MUST be called fresh every time, never
+# answered from conversation history. Prompt-level rules (ACCURACY RULE,
+# FRESHNESS RULE in config.py) reduce but don't reliably eliminate the
+# model answering from a stale number it saw in its own earlier reply --
+# especially on weaker fallback models. For these specific diagnostic
+# queries, we don't give the model the option: the tool is called here in
+# code, and the LLM is only asked to phrase the result that's already in
+# hand, never to decide whether fetching it again was necessary.
+FORCE_REFRESH_TOOLS = [
+    (["why is my battery draining", "battery drain", "draining my battery",
+      "what's using my battery", "what is using my battery"], "get_battery_diagnostics", {}),
+    (["screen timeout", "screen off timeout"], "get_system_setting",
+     {"key": "screen_off_timeout", "namespace": "system"}),
+]
+
+
+def detect_force_refresh(text: str):
+    """Returns (tool_name, args) if the text matches a forced-refresh
+    diagnostic query, else None. Only matches read-style phrasing ('what
+    is', 'tell me', 'why') -- a command like 'set screen timeout to 30
+    seconds' should still go through the normal LLM tool-selection path,
+    since it needs set_system_setting, not a forced read.
+
+    Note: "set" alone isn't enough to detect a write command -- phrasing
+    like "what's my screen timeout set to" is a READ (asking what it's
+    currently set to), not a write, even though it contains "set". A write
+    command has a VALUE after "to" (e.g. "set screen timeout to 30
+    seconds"); a read query ends at "set to" with nothing meaningful after
+    it (other than a trailing "?").
+    """
+    t = text.lower().strip()
+
+    if re.search(r"\bset\b", t):
+        after_to = re.search(r"\bto\b(.*)$", t)
+        is_write_command = bool(after_to and after_to.group(1).strip().strip("?"))
+    else:
+        is_write_command = any(w in t for w in ["change ", "turn on", "turn off", "enable", "disable"])
+
+    if is_write_command:
+        return None
+    for phrases, tool_name, args in FORCE_REFRESH_TOOLS:
+        if any(p in t for p in phrases):
+            return tool_name, args
+    return None
+
+
+def handle_force_refresh(tool_name: str, args: dict, command_str: str, history: deque):
+    """Runs a forced-refresh tool fresh, then asks the LLM only to phrase
+    the result for speech -- the LLM cannot skip the tool call, only the
+    wording of the final spoken answer."""
+    print(f"{COLOR_GRAY}[Force-refresh: {tool_name}]{COLOR_RESET}")
+    try:
+        result = TOOLS[tool_name](**args)
+    except Exception as e:
+        result = f"[{tool_name} Error: {e}]"
+
+    from jarvis.tools.media import speak
+    extra_guidance = ""
+    if tool_name == "get_battery_diagnostics":
+        extra_guidance = (
+            " This data describes battery STATE only -- it does not identify what is consuming power. "
+            "If the user asked 'why' it's draining, do not imply these state facts are the cause. "
+            "Briefly report level/health/charging status, then say this doesn't show what's using the power, "
+            "and suggest checking Settings > Battery > Battery usage on the device for an app-level breakdown."
+        )
+    messages = build_messages(history, (
+        f"The user asked: \"{command_str}\"\n"
+        f"Fresh tool result just retrieved (use these exact values, do not alter them): {result}\n"
+        f"Speak a short, natural, and HONEST answer using ONLY the values above.{extra_guidance} Call the 'speak' tool now."
+    ))
+    response_gen = call_ai(messages)
+    display, full_text = handle_response(response_gen, history, messages)
+    print(f"\n{COLOR_CYAN}AI Summary:{COLOR_RESET} {display}\n")
+
+    history.append({"role": "user", "content": command_str})
+    history.append({"role": "assistant", "content": f"{display}\n[Fresh tool result this turn: {result}]"})
+    save_persistent_history(history)
+
+
 def classify_local_intent(text: str):
     """
     Lightweight regex-based router to intercept hardware commands locally.
@@ -293,7 +374,18 @@ def execute_text_command(command_str: str):
         sys.exit(0)
 
     history = load_persistent_history()
-    
+
+    # --- Forced-refresh diagnostic queries ---
+    # Checked BEFORE classify_local_intent and BEFORE the LLM gets a chance
+    # to "decide" whether to call the tool. These specific queries (battery
+    # drain, screen timeout, etc.) must always run fresh -- never answered
+    # from a stale number sitting in conversation history.
+    force_match = detect_force_refresh(command_str)
+    if force_match:
+        tool_name, args = force_match
+        handle_force_refresh(tool_name, args, command_str, history)
+        return
+
     # --- Local Fast-Pass Routing ---
     local_match = classify_local_intent(command_str)
     if local_match:
