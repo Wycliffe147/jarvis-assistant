@@ -1,0 +1,169 @@
+import subprocess
+import os
+import xml.etree.ElementTree as ET
+from jarvis.tools.devices_ext import _get_default_adb_target, _resolve_target, _ensure_adb_connected
+
+# --- Read-only UI inspection ---
+#
+# This module only ever reads what is currently on screen. It has no tap,
+# swipe, text-input, or click capability of any kind. It exists so Jarvis
+# (or the person asking it questions) can find out what's on the screen
+# right now -- e.g. "what does this dialog say", "what buttons are visible" --
+# without taking any action on the person's behalf. Any actual interaction
+# still has to go through the existing explicit, coordinate-based ADB tools
+# (adb_command's tap/swipe/text), one deliberate action at a time.
+
+DUMP_REMOTE_PATH = "/sdcard/jarvis_ui_dump.xml"
+
+
+def _resolve_local_target(target_ip: str = "") -> str | None:
+    """Resolves the ADB target to inspect, defaulting to whatever's already
+    connected. Returns None if no device link can be established."""
+    if not target_ip or target_ip.lower() == "default":
+        target_ip = _get_default_adb_target()
+    target = _resolve_target(target_ip)
+    if not _ensure_adb_connected(target):
+        return None
+    return target
+
+
+def _fetch_ui_xml(target: str) -> str | None:
+    """Dumps the current UI hierarchy on the target device and returns the
+    raw XML as a string, or None on failure."""
+    dump_res = subprocess.run(
+        ["adb", "-s", target, "shell", "uiautomator", "dump", DUMP_REMOTE_PATH],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=15
+    )
+    if dump_res.returncode != 0:
+        return None
+
+    cat_res = subprocess.run(
+        ["adb", "-s", target, "shell", "cat", DUMP_REMOTE_PATH],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10
+    )
+    # Best-effort cleanup of the temp file on the device
+    subprocess.run(
+        ["adb", "-s", target, "shell", "rm", "-f", DUMP_REMOTE_PATH],
+        stdin=subprocess.DEVNULL, timeout=10
+    )
+
+    if cat_res.returncode != 0 or not cat_res.stdout.strip():
+        return None
+    return cat_res.stdout
+
+
+def _parse_elements(xml_data: str, only_interactive: bool) -> list[dict]:
+    """Parses uiautomator XML into a flat list of element dicts. Each dict
+    has: text, resource_id, class_name, bounds, clickable, scrollable."""
+    elements = []
+    try:
+        root = ET.fromstring(xml_data)
+    except ET.ParseError:
+        return elements
+
+    for node in root.iter("node"):
+        text = node.attrib.get("text", "").strip()
+        desc = node.attrib.get("content-desc", "").strip()
+        resource_id = node.attrib.get("resource-id", "").strip()
+        class_name = node.attrib.get("class", "").strip()
+        clickable = node.attrib.get("clickable", "false") == "true"
+        scrollable = node.attrib.get("scrollable", "false") == "true"
+        bounds = node.attrib.get("bounds", "")
+
+        # Skip nodes that carry no useful information at all
+        if not text and not desc and not resource_id:
+            continue
+        if only_interactive and not (clickable or scrollable):
+            continue
+
+        elements.append({
+            "text": text or desc,
+            "resource_id": resource_id.split("/")[-1] if resource_id else "",
+            "class_name": class_name.split(".")[-1] if class_name else "",
+            "bounds": bounds,
+            "clickable": clickable,
+            "scrollable": scrollable,
+        })
+    return elements
+
+
+def ui_dump(target_ip: str = "", only_interactive: bool = True) -> str:
+    """Reads the current screen contents (read-only -- does not tap, type,
+    or interact in any way). Returns a text list of visible text, labels,
+    and buttons along with their on-screen positions, so Jarvis or the user
+    can know what's currently displayed.
+
+    Args:
+        target_ip: ADB target to inspect. Leave blank to use the currently
+            connected/default device.
+        only_interactive: if True (default), only lists elements that are
+            clickable or scrollable (buttons, links, lists). Set False to
+            see every text label on screen, including plain static text.
+    """
+    target = _resolve_local_target(target_ip)
+    if not target:
+        return f"Could not establish an ADB link to inspect. Ensure Wireless Debugging is active and the device is connected."
+
+    xml_data = _fetch_ui_xml(target)
+    if not xml_data:
+        return "Failed to read the screen contents. The device may be locked, asleep, or uiautomator failed to start."
+
+    elements = _parse_elements(xml_data, only_interactive)
+    if not elements:
+        kind = "interactive elements" if only_interactive else "elements with text"
+        return f"No {kind} found on the current screen."
+
+    lines = [f"Found {len(elements)} element(s) on screen:"]
+    for el in elements:
+        parts = [f'"{el["text"]}"'] if el["text"] else []
+        if el["resource_id"]:
+            parts.append(f"id={el['resource_id']}")
+        if el["class_name"]:
+            parts.append(el["class_name"])
+        tags = []
+        if el["clickable"]:
+            tags.append("clickable")
+        if el["scrollable"]:
+            tags.append("scrollable")
+        if tags:
+            parts.append(f"[{', '.join(tags)}]")
+        if el["bounds"]:
+            parts.append(f"at {el['bounds']}")
+        lines.append("  - " + " ".join(parts))
+
+    return "\n".join(lines)
+
+
+def ui_find_text(query: str, target_ip: str = "") -> str:
+    """Reads the current screen (read-only) and reports whether any visible
+    text or button matches the given query, along with its position. Does
+    not tap or interact with anything -- purely informational, e.g. to
+    answer 'is there a Save button on screen right now'.
+
+    Args:
+        query: text to search for, case-insensitive, partial match allowed.
+        target_ip: ADB target to inspect. Leave blank to use the default device.
+    """
+    target = _resolve_local_target(target_ip)
+    if not target:
+        return "Could not establish an ADB link to inspect."
+
+    xml_data = _fetch_ui_xml(target)
+    if not xml_data:
+        return "Failed to read the screen contents."
+
+    elements = _parse_elements(xml_data, only_interactive=False)
+    query_lower = query.lower().strip()
+    matches = [el for el in elements if query_lower in el["text"].lower()]
+
+    if not matches:
+        return f"No element matching '{query}' was found on the current screen."
+
+    lines = [f"Found {len(matches)} match(es) for '{query}':"]
+    for el in matches:
+        descriptor = f'"{el["text"]}"'
+        if el["resource_id"]:
+            descriptor += f" (id={el['resource_id']})"
+        state = "clickable" if el["clickable"] else "not clickable"
+        lines.append(f"  - {descriptor}, {state}, at {el['bounds']}")
+    return "\n".join(lines)
