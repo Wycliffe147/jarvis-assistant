@@ -102,6 +102,7 @@ SYSTEM_PROMPT = (
     'DEVICE IDENTITY: A device listed as a serial name like "emulator-5554" is THIS very phone (the host). A device listed as an IP address like "192.168.x.x:PORT" is an EXTERNAL phone. '
     'When the user says "the other phone" or "external device", target the IP-based device, NOT the emulator/serial one. '
     'ADB KEYEVENT CODES: Home=3, Back=4, Power/Screen=26, Volume Up=24, Volume Down=25, Recents=187. Use action="keyevent" with the correct code — do NOT use tap coordinates for hardware buttons. '
+    'ADB MIRRORING RULE: "mirror", "screen mirror", "show me the screen", "let me control it directly", or "open a live view" of the other phone means adb_mirror_device — a LIVE interactive window, NOT adb_screenshot (which is only a single static image). Call adb_list_devices first as usual. "stop mirroring" or "close the mirror" means adb_stop_mirror. '
     'To stream/cast media to Smart TVs or network speakers, scan using "dlna_scan" then cast using "dlna_cast". '
     'To pair and manage Bluetooth audio outputs, call "open_bluetooth_settings".\n'
     'Available tools will be listed in the prompt by the tool manager.'

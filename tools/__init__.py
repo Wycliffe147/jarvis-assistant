@@ -7,7 +7,7 @@ from jarvis.tools.network import open_url, get_wifi_info, scan_wifi, set_wifi, g
 from jarvis.tools.camera import take_photo, analyze_photo, local_ocr
 from jarvis.tools.apps import list_apps, open_app, search_launcher_apps
 from jarvis.tools.link import link_start_server, link_status, link_scan, link_send_message, link_send_command, link_send_file, link_sync_clipboard
-from jarvis.tools.devices_ext import open_bluetooth_settings, adb_connect, adb_disconnect, adb_pair_device, adb_list_devices, adb_command, adb_screenshot, adb_mdns_reconnect, dlna_scan, dlna_cast, dlna_stop
+from jarvis.tools.devices_ext import open_bluetooth_settings, adb_connect, adb_disconnect, adb_pair_device, adb_list_devices, adb_command, adb_screenshot, adb_mdns_reconnect, adb_mirror_device, adb_stop_mirror, dlna_scan, dlna_cast, dlna_stop
 from jarvis.tools.hotspot import hotspot_enable, hotspot_disable, hotspot_open_settings, hotspot_status, hotspot_scan_clients, hotspot_adb_autoconnect
 
 
@@ -83,6 +83,8 @@ TOOLS = {
     "adb_command":         adb_command,
     "adb_screenshot":      adb_screenshot,
     "adb_mdns_reconnect":  adb_mdns_reconnect,
+    "adb_mirror_device":   adb_mirror_device,
+    "adb_stop_mirror":     adb_stop_mirror,
     "dlna_scan":           dlna_scan,
     "dlna_cast":           dlna_cast,
     "dlna_stop":           dlna_stop,
@@ -175,6 +177,8 @@ adb_list_devices()               - List all currently connected ADB devices by i
 adb_command(target_ip, action, params_json) - Send a command (tap, swipe, text, keyevent, launch, shell) to ADB target phone. Provide arguments as stringified JSON.
 adb_screenshot(target_ip, filename) - Takes a screenshot of the ADB target device and pulls it to the local Downloads folder.
 adb_mdns_reconnect(prefer_serial) - Reconnects to a previously-paired ADB device by scanning mDNS, regardless of which network it's on (no shared hotspot needed). Use this if adb_command/adb_screenshot fail because the device's IP or port changed and it's not on this phone's own hotspot.
+adb_mirror_device(target_ip, orientation) - Opens a LIVE interactive mirror of the connected phone's screen in a Termux:X11 window using scrcpy. Use this for "mirror", "screen mirror", "show me the other phone's screen", "let me control it directly" — NOT adb_screenshot, which only takes a single static image. Tapping/swiping the window controls the target phone like a normal touchscreen, no extra setup needed. orientation defaults to "portrait".
+adb_stop_mirror() - Closes the currently running screen mirror session.
 dlna_scan()                      - Scan the local network for DLNA smart TVs, screens, and speakers.
 dlna_cast(target_ip, media_url, media_title) - Stream audio/video URLs directly to a local smart TV or speaker.
 dlna_stop(target_ip)             - Stop casting/playback on DLNA smart TV or speaker.

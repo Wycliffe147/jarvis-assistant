@@ -501,6 +501,164 @@ def adb_screenshot(target_ip: str = "", filename: str = "adb_screencap.png") -> 
     return f"Failed to pull screenshot: {res.stderr.strip()}"
 
 
+# --- Live Screen Mirroring (scrcpy over Termux:X11) ---
+#
+# Opens a real-time, interactive mirror window via scrcpy, rendered through
+# Termux:X11. Requires the Termux:X11 app to already be running (it provides
+# the X11 display surface — scrcpy has nowhere to draw its window otherwise).
+# Touch input needs no special flags: tapping/swiping directly on the phone's
+# screen inside the Termux:X11 window is translated by scrcpy into real touch
+# events on the target device by default — this is standard scrcpy behavior,
+# not something we need to configure.
+
+MIRROR_PID_FILE = os.path.expanduser("~/.jarvis_scrcpy.pid")
+
+def _scrcpy_available() -> bool:
+    res = subprocess.run(["which", "scrcpy"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    return bool(res.stdout.strip())
+
+def adb_mirror_device(target_ip: str = "", orientation: str = "portrait") -> str:
+    """Opens a live, interactive mirror of the ADB-connected phone's screen in a
+    Termux:X11 GUI window using scrcpy. Tapping/swiping on the phone's screen
+    inside the mirror window controls the target device directly, like using
+    it normally — no separate input mode needed, this is scrcpy's default.
+
+    Requires the Termux:X11 app to be running first (it provides the display
+    the scrcpy window renders into).
+
+    Args:
+        target_ip: ADB target to mirror. Defaults to the current default target.
+        orientation: "portrait" (default), "landscape", "upside_down", or
+            "landscape_reverse". Controls --capture-orientation (locked with the
+            "@" prefix) so the window doesn't flip around as the phone's sensor
+            rotates. Note: scrcpy 3.0+ replaced the old --lock-video-orientation
+            flag (which was broken on Android 14+) with --capture-orientation,
+            expressed in degrees clockwise rather than the old 0-3 enum.
+    """
+    if not _scrcpy_available():
+        return ("scrcpy isn't installed. Run `pkg install scrcpy` in Termux first.")
+
+    if not target_ip or target_ip.lower() == "default":
+        target_ip = _get_default_adb_target()
+
+    target = _resolve_target(target_ip)
+    if not _ensure_adb_connected(target):
+        return f"Could not establish ADB link to {target}. Connect or reconnect the device first."
+
+    # Re-resolve in case auto-reconnect (mDNS/hotspot) changed the target
+    if not target_ip or target_ip.lower() == "default":
+        target_ip = _get_default_adb_target()
+        target = _resolve_target(target_ip)
+
+    # Degrees clockwise, per current --capture-orientation syntax (scrcpy 3.0+).
+    orientation_map = {
+        "portrait": "0",
+        "landscape": "90",
+        "upside_down": "180",
+        "landscape_reverse": "270",
+    }
+    degrees = orientation_map.get(orientation.lower().replace(" ", "_"), "0")
+
+    # If a mirror session is already running, stop it first rather than
+    # stacking multiple scrcpy windows.
+    existing = _mirror_status()
+    if "Mirroring is active" in existing:
+        adb_stop_mirror()
+
+    env = os.environ.copy()
+    env.setdefault("DISPLAY", ":0")  # Termux:X11 default display
+
+    cmd = [
+        "scrcpy",
+        "-s", target,
+        f"--capture-orientation=@{degrees}",
+        "--window-title=Jarvis Mirror",
+        "--stay-awake",
+    ]
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        return "scrcpy isn't installed. Run `pkg install scrcpy` in Termux first."
+    except Exception as e:
+        return f"Failed to launch scrcpy: {e}"
+
+    # Give it a moment to fail fast (e.g. no X11 display, device not authorized)
+    # rather than reporting success on a process that's about to die.
+    import time as _time
+    _time.sleep(1.5)
+    if proc.poll() is not None:
+        stderr_out = ""
+        try:
+            stderr_out = proc.stderr.read().decode("utf-8", errors="ignore").strip()
+        except Exception:
+            pass
+        hint = ""
+        if "DISPLAY" in stderr_out or "cannot open display" in stderr_out.lower() or not stderr_out:
+            hint = " Make sure the Termux:X11 app is open and running first — scrcpy needs it for its window."
+        return f"scrcpy exited immediately (code {proc.returncode}).{hint}\n{stderr_out[:300]}"
+
+    try:
+        with open(MIRROR_PID_FILE, "w") as f:
+            json.dump({"pid": proc.pid, "target": target}, f)
+    except Exception:
+        pass
+
+    return f"✅ Mirroring {target} now in a {orientation} window. Tap and swipe on the mirror window like a normal phone screen. Say 'stop mirroring' to close it."
+
+
+def _mirror_status() -> str:
+    if not os.path.exists(MIRROR_PID_FILE):
+        return "No mirror session is currently tracked."
+    try:
+        with open(MIRROR_PID_FILE, "r") as f:
+            data = json.load(f)
+        pid = data.get("pid")
+        target = data.get("target", "unknown")
+        if pid and _pid_alive(pid):
+            return f"Mirroring is active for {target} (pid {pid})."
+        return f"No active mirror (last session for {target} has ended)."
+    except Exception:
+        return "No mirror session is currently tracked."
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+    except Exception:
+        return False
+
+
+def adb_stop_mirror() -> str:
+    """Stops the currently running scrcpy mirror session, if any."""
+    if not os.path.exists(MIRROR_PID_FILE):
+        return "No mirror session is currently running."
+    try:
+        with open(MIRROR_PID_FILE, "r") as f:
+            data = json.load(f)
+        pid = data.get("pid")
+        if pid and _pid_alive(pid):
+            import signal
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+        os.remove(MIRROR_PID_FILE)
+        return "Mirror session stopped."
+    except Exception as e:
+        return f"Could not cleanly stop mirror session: {e}"
+
+
 
 # --- DLNA / UPnP Media Casting ---
 
