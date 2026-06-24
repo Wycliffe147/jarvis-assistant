@@ -88,6 +88,67 @@ def _process_and_upload_vision(input_path: str, prompt: str) -> str:
     except Exception as e:
         return f"Network link dropped during cloud vision parsing: {e}"
 
+def _local_screencap(output_path: str = "/sdcard/jarvis_screencap.png") -> str | None:
+    """Captures a screenshot of THIS phone's screen using ADB (host device).
+    Returns the saved file path on success, or None on failure.
+
+    Uses _get_default_adb_target() which returns the first connected ADB device —
+    on Termux this is always the host device serial (e.g. emulator-5554), the
+    same target ui_dump already uses for local screen inspection.
+    No wireless debugging needed; ADB runs locally over the loopback interface.
+    """
+    from jarvis.tools.devices_ext import _get_default_adb_target, _resolve_target, _ensure_adb_connected
+
+    target_id = _get_default_adb_target()
+    target = _resolve_target(target_id)
+
+    if not _ensure_adb_connected(target):
+        return None
+
+    # screencap writes a PNG directly to the device filesystem. Since this IS
+    # the device, /sdcard/ is directly accessible — no adb pull needed.
+    result = subprocess.run(
+        ["adb", "-s", target, "shell", "screencap", "-p", output_path],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10
+    )
+    if result.returncode != 0:
+        return None
+
+    # Give the file a moment to flush to disk before we read it
+    import time as _time
+    for _ in range(10):
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return output_path
+        _time.sleep(0.2)
+
+    return None
+
+
+def read_my_screen(prompt: str = "Describe what is currently on the screen. If there is text, read it. If it is a UI, describe what app and what the user is looking at. If there are any errors or warnings, highlight them.") -> str:
+    """Captures a screenshot of THIS phone's screen and sends it to the vision
+    model for analysis. Use when the user asks 'what's on my screen', 'what am
+    I looking at', 'read this page', 'what does this error say', or any question
+    about the current screen content that goes beyond button/element listing.
+
+    Unlike ui_dump (which reads the accessibility tree), this sees the actual
+    rendered pixels — including canvas content, web views, images with text,
+    PDFs, video frames, and anything uiautomator cannot introspect.
+
+    Args:
+        prompt: What to ask the vision model about the screenshot. Defaults to
+                a general screen-reading prompt. Customise for specific tasks,
+                e.g. 'What error is shown?' or 'Summarise the article visible.'
+    """
+    screencap_path = "/sdcard/jarvis_screencap.png"
+    print(f"{COLOR_GRAY}[Capturing host screen via ADB screencap...]{COLOR_RESET}")
+
+    saved_path = _local_screencap(screencap_path)
+    if not saved_path:
+        return "Screen capture failed: could not get a screenshot from the local ADB device. Make sure Wireless Debugging is enabled in Developer Options."
+
+    return _process_and_upload_vision(saved_path, prompt)
+
+
 def local_ocr(camera: int = 0) -> str:
     photo_path = "/sdcard/ocr_snap.jpg"
     print(f"{COLOR_GRAY}[Taking snapshot for OCR via camera {camera}...]{COLOR_RESET}")
@@ -111,3 +172,33 @@ def local_ocr(camera: int = 0) -> str:
         return "The local OCR engine completed processing but found no readable text inside the frame."
 
     return f"Extracted text from image: {extracted_text}"
+
+
+def ocr_my_screen() -> str:
+    """Captures a screenshot of THIS phone's screen and extracts all visible
+    text from it using Tesseract OCR — offline, no API call, near-instant.
+
+    Use this when the user asks to 'read my screen', 'read the text on screen',
+    'what does that notification say', or needs raw text lifted from an app that
+    blocks copy-paste (e.g. banking apps, DRM content, games). Prefer this over
+    read_my_screen when the goal is text extraction rather than understanding
+    layout or context.
+    """
+    screencap_path = "/sdcard/jarvis_screencap_ocr.png"
+    print(f"{COLOR_GRAY}[Capturing host screen for OCR...]{COLOR_RESET}")
+
+    saved_path = _local_screencap(screencap_path)
+    if not saved_path:
+        return "Screen capture failed: could not get a screenshot from the local ADB device. Make sure Wireless Debugging is enabled in Developer Options."
+
+    print(f"{COLOR_GRAY}[Running Tesseract OCR on screen capture...]{COLOR_RESET}")
+    result = subprocess.run(
+        ["tesseract", saved_path, "stdout"],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL
+    )
+
+    extracted_text = result.stdout.strip()
+    if not extracted_text:
+        return "OCR found no readable text on the current screen."
+
+    return f"Text extracted from screen: {extracted_text}"
