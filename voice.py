@@ -44,6 +44,18 @@ def listen_for_wake_word(wake_word: str = "jarvis") -> str | None:
         if matched_variant:
             print(f"{COLOR_GRAY}[Heard: {text}]{COLOR_RESET}", flush=True)
             command = re.sub(rf'(?i){matched_variant}[,\s]*', '', text).strip()
+
+            # Same noise filter get_voice_input() uses: after stripping the
+            # wake word, what's left might just be punctuation (e.g. saying
+            # only "Jarvis." leaves "." once the wake word is removed). That
+            # is not a real inline command -- it means the user said the
+            # wake word and nothing else, so this should fall through to
+            # get_voice_input() in main.py exactly like an empty command
+            # does, not get treated as "Jarvis, do this.".
+            clean_command = command.replace(".", "").strip()
+            if not clean_command:
+                return ""
+
             return command
         else:
             return None

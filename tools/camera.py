@@ -2,9 +2,41 @@ import subprocess
 import os
 import time
 import requests
-from jarvis.config import API_KEY, MODEL_VISION, URL_CHAT, VISION_MAX_PX, VISION_PHOTO_FILE, COLOR_GRAY, COLOR_RED, COLOR_RESET
+from jarvis.config import API_KEY, MODEL_VISION, URL_CHAT, VISION_MAX_PX, VISION_PHOTO_FILE, COLOR_GRAY, COLOR_RED, COLOR_YELLOW, COLOR_RESET
+from jarvis import state
 
 from jarvis.tools.device import get_sensor, torch
+
+
+def _check_ffmpeg_available() -> bool:
+    """Checks once per session whether ffmpeg is installed, caching the
+    result in state.py so every photo/screenshot analysis doesn't re-run
+    `which ffmpeg` as its own subprocess call."""
+    if state.ffmpeg_available is None:
+        result = subprocess.run(["which", "ffmpeg"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        state.ffmpeg_available = (result.returncode == 0)
+    return state.ffmpeg_available
+
+
+def confirm_uncompressed_upload() -> str:
+    """Call this ONLY after the user has explicitly agreed to send images/
+    screenshots to the vision API at full size, uncompressed, because ffmpeg
+    is not installed on this device. Do not call this proactively or assume
+    consent -- it must follow a direct yes from the user in this session
+    (e.g. they were asked and replied "go ahead anyway" / "skip it" /
+    "proceed without compression" or similar).
+
+    This approval lasts for the rest of the current session only. If Jarvis
+    restarts, the user will be asked again the next time vision analysis is
+    attempted.
+    """
+    state.user_approved_uncompressed_upload = True
+    return (
+        "Understood — uncompressed image uploads are now approved for the rest of this session. "
+        "Photos and screenshots sent for analysis will use full resolution/quality until Jarvis restarts."
+    )
+
+
 def take_photo(camera: int = 0, output: str = "/sdcard/photo.jpg"):
     subprocess.run(["termux-camera-photo", "-c", str(camera), output], stdin=subprocess.DEVNULL)
     return f"Photo taken with camera {camera}, saved to {output}"
@@ -28,24 +60,43 @@ def analyze_photo(prompt: str = "Analyze this image carefully. If you see any pr
     return _process_and_upload_vision(photo_path, prompt)
 def _process_and_upload_vision(input_path: str, prompt: str) -> str:
     image_path = input_path
-    try:
-        ffmpeg_check = subprocess.run(["which", "ffmpeg"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
-        if ffmpeg_check.returncode == 0:
+
+    if _check_ffmpeg_available():
+        try:
             resized_path = "/sdcard/jarvis_vision_small.jpg"
             if os.path.exists(resized_path):
                 os.remove(resized_path)
-                
+
             subprocess.run([
                 "ffmpeg", "-y", "-i", input_path,
                 "-vf", f"scale='if(gt(iw,ih),{VISION_MAX_PX},-2)':'if(gt(iw,ih),-2,{VISION_MAX_PX})'",
                 "-q:v", "5",
                 resized_path
             ], capture_output=True, stdin=subprocess.DEVNULL)
-            
+
             if os.path.exists(resized_path) and os.path.getsize(resized_path) > 0:
                 image_path = resized_path
-    except Exception:
-        pass
+        except Exception:
+            pass
+    elif not state.user_approved_uncompressed_upload:
+        # ffmpeg is missing and the user hasn't said it's OK to upload
+        # uncompressed images this session -- stop here instead of silently
+        # sending the full-resolution file. Report the real file size so
+        # the user can make an informed call rather than guessing at impact.
+        try:
+            size_kb = os.path.getsize(input_path) / 1024
+            size_note = f"~{size_kb:.0f} KB uncompressed"
+        except Exception:
+            size_note = "size unknown"
+        print(f"{COLOR_YELLOW}[ffmpeg not found -- pausing before upload, awaiting user confirmation]{COLOR_RESET}")
+        return (
+            "I can't compress this image before sending it for analysis because ffmpeg isn't installed "
+            f"on this device ({size_note}). I'm not uploading it yet. "
+            "You can either install ffmpeg yourself (e.g. `pkg install ffmpeg` in Termux) and try again, "
+            "or tell me to go ahead without compression and I'll send it at full size for this session."
+        )
+    # else: ffmpeg missing but the user already approved uncompressed
+    # uploads this session -- fall through and upload input_path as-is.
 
     try:
         with open(image_path, "rb") as f:

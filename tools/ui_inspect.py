@@ -315,6 +315,15 @@ def ui_tap_element(query: str, target_ip: str = "", match_by: str = "text",
     its exact center. This is the PREFERRED way to tap buttons, search bars,
     and input fields — it eliminates coordinate math errors entirely.
 
+    IMPORTANT: query must be REAL text or resource-id that actually appears
+    in a ui_dump of the current screen — this is a literal substring match,
+    not a description of intent. Phrases like "first result," "the video,"
+    or "top item" will never match anything and will always fail, even if
+    such an item is visibly on screen. Call ui_dump first, read the actual
+    label/text of the element you want, and pass that. If the item has no
+    unique text (e.g. an unlabeled thumbnail in a list), use ui_dump's
+    bounds for that element and tap its center via input_my_screen instead.
+
     Args:
         query:      The text label or resource-id fragment to match.
                     Examples: "Search", "search_bar", "search_edit_text"
@@ -356,8 +365,64 @@ def ui_tap_element(query: str, target_ip: str = "", match_by: str = "text",
                    or query_lower in el["resource_id"].lower()]
 
     if not matches:
+        # Common, specific mistake: passing a description of intent/position
+        # ("first result", "the video", "top item") instead of real on-screen
+        # text. Catch the obvious cases and hint at the actual fix, rather
+        # than just "not found" -- this exact phrase pattern has caused
+        # repeated failed taps on list/result screens.
+        positional_phrases = ("first result", "first video", "top result", "top item",
+                               "the video", "the result", "first item", "second result",
+                               "second item")
+        if query_lower in positional_phrases:
+            return (f"'{query}' is not real on-screen text — ui_tap_element only matches literal "
+                    f"labels/resource-ids from the current screen, it has no concept of position or order. "
+                    f"Call ui_dump, read the actual text of the specific item (e.g. the real video title), "
+                    f"and use that as the query. If the item has no unique text, tap its bounds directly "
+                    f"via input_my_screen instead.")
         return (f"No element matching '{query}' found on screen. "
                 f"Call ui_dump to see what's available.")
+
+    # Search boxes/input fields often still display the user's own search
+    # term as their current text (e.g. a search_query TextView showing
+    # "apostle mike" right after submitting that search). Two distinct
+    # failure modes follow from this, both fixed here:
+    #
+    # 1. If the query is the search term itself (or close to it), it may
+    #    ONLY match the search box/field -- nothing else on screen contains
+    #    that exact text, because a real result's title is usually phrased
+    #    differently (e.g. "Apostle Michael Orokpo", not "apostle mike").
+    #    Tapping the search box again is actively wrong here, not just
+    #    suboptimal -- it re-focuses the search field and goes nowhere.
+    #    Refuse and explain, rather than silently tapping it.
+    # 2. If BOTH the search box and real content happen to match (a genuine
+    #    substring collision), prefer the real content: push down anything
+    #    whose resource-id marks it as search/input chrome, then among the
+    #    rest prefer the LONGEST matching text, since a real result's
+    #    accessible text (title + metadata) is far longer than a short
+    #    search-box echo.
+    #
+    # Only applies when matching by text. If match_by="id" was used, the
+    # caller is deliberately targeting a resource-id (possibly the search
+    # box itself, e.g. to focus it on purpose) -- that's an intentional,
+    # specific request and shouldn't be second-guessed by this heuristic.
+    if match_by != "id":
+        chrome_id_markers = ("search_query", "search_box", "search_edit", "search_src_text", "edit_text")
+
+        def _is_chrome(element):
+            rid = element["resource_id"].lower()
+            return any(marker in rid for marker in chrome_id_markers)
+
+        non_chrome = [el for el in matches if not _is_chrome(el)]
+
+        if not non_chrome:
+            # Every match was search/input chrome -- the query didn't actually
+            # find real content, it just happened to match the search field.
+            return (f"'{query}' only matched the search box/input field, not any real content on screen. "
+                    f"This usually means the query is too close to the search term itself rather than the "
+                    f"actual item you want to tap. Call ui_dump, find the REAL distinguishing text of the "
+                    f"specific item (e.g. the full video title, not the search query), and use that instead.")
+
+        matches = sorted(non_chrome, key=lambda el: len(el["text"]), reverse=True)
 
     idx = max(0, occurrence - 1)
     if idx >= len(matches):
