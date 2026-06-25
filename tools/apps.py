@@ -2,6 +2,28 @@ import subprocess
 from jarvis.config import COLOR_GRAY, COLOR_RESET
 from jarvis.cache.activity_cache import _load_activity_cache, _save_activity_cache
 
+
+def _adb_target() -> str | None:
+    """Resolves which device 'this phone' actually means for bare adb calls.
+
+    This phone shows up to adb as TWO valid entries at once -- a serial like
+    'emulator-5554' (Termux's local adbd reporting itself) and the loopback
+    TCP target '127.0.0.1:5555' set up by devices_ext.py. Both point at the
+    same physical device; neither is wrong. But any bare 'adb' command with
+    no '-s <target>' has to guess between them, and the moment a second real
+    device is also connected, adb refuses to guess at all
+    ('error: more than one device/emulator') -- and even with just these two
+    host entries, results can be silently inconsistent (e.g. pidof returning
+    empty because it queried the wrong one).
+
+    Standardizing on _resolve_local_target() pins every call in this module
+    to the same explicit target ui_inspect.py already uses, instead of
+    leaving adb to pick.
+    """
+    from jarvis.tools.ui_inspect import _resolve_local_target
+    return _resolve_local_target()
+
+
 def list_apps(search_query: str = "") -> str:
     """Lists installed third-party user apps using native shell cmd framework."""
     result = subprocess.run(["cmd", "package", "list", "packages", "-3"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
@@ -25,17 +47,26 @@ def _get_foreground_package() -> str:
     Uses 'dumpsys activity top' (faster, more reliable than 'dumpsys window windows')
     with a fallback to window focus parsing.
     """
+    target = _adb_target()
+    if not target:
+        return ""
     try:
         # Primary: dumpsys activity top — first non-empty TASK line gives the package
         res = subprocess.run(
-            ["adb", "shell", "dumpsys", "activity", "top"],
+            ["adb", "-s", target, "shell", "dumpsys", "activity", "top"],
             capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
         )
         for line in res.stdout.splitlines():
             line = line.strip()
             if line.startswith("TASK") and " " in line:
-                # Format: "TASK com.whatsapp id=123 userId=0"
-                pkg = line.split()[1]
+                # Format: "TASK 10266:com.whatsapp id=123 userId=0" -- the
+                # second token is "<uid>:<package>", not just "<package>".
+                # Previously this returned the uid-prefixed string as-is,
+                # which could never match a clean package name comparison
+                # (e.g. restart_app's foreground check), so it always
+                # reported "background" even when the app was frontmost.
+                token = line.split()[1]
+                pkg = token.split(":", 1)[1] if ":" in token else token
                 if "." in pkg:
                     return pkg
     except Exception:
@@ -44,7 +75,7 @@ def _get_foreground_package() -> str:
     try:
         # Fallback: mCurrentFocus from window manager
         res = subprocess.run(
-            ["adb", "shell", "dumpsys", "window", "windows"],
+            ["adb", "-s", target, "shell", "dumpsys", "window", "windows"],
             capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
         )
         for line in res.stdout.splitlines():
@@ -87,9 +118,12 @@ def _wait_for_app_ready(package_name: str, timeout: float = 10.0, poll_interval:
 def _is_app_running(package_name: str) -> bool:
     """Returns True if the app has a live process — meaning it is already running
     in the background or foreground and does not need a cold launch."""
+    target = _adb_target()
+    if not target:
+        return False
     try:
         res = subprocess.run(
-            ["adb", "shell", "pidof", package_name],
+            ["adb", "-s", target, "shell", "pidof", package_name],
             capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
         )
         return bool(res.stdout.strip())
@@ -283,3 +317,184 @@ def search_launcher_apps(query: str) -> str:
         return "Error: Package list query timed out."
     except Exception as e:
         return f"Error searching launcher matrix: {e}"
+
+
+def _get_app_pid(package_name: str) -> str:
+    """Returns the current PID of a running package, or '' if not running."""
+    target = _adb_target()
+    if not target:
+        return ""
+    try:
+        res = subprocess.run(
+            ["adb", "-s", target, "shell", "pidof", package_name],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
+        )
+        return res.stdout.strip().split()[0] if res.stdout.strip() else ""
+    except Exception:
+        return ""
+
+
+def restart_app(package_name: str, force: bool = False) -> str:
+    """Force-stops an app and relaunches it fresh. Use this when an app is
+    frozen, unresponsive, stuck on a loading/black screen, or behaving
+    incorrectly and a normal open_app (bring-to-front) isn't fixing it.
+
+    Unlike open_app, this ALWAYS kills the existing process first (via
+    `am force-stop`), so the app's back stack and in-memory state are reset
+    — it does not just bring an existing instance forward. Use open_app
+    instead if you just want to switch to an app that's working fine.
+
+    Args:
+        package_name: The app's package identifier (e.g. com.google.android.youtube).
+                      Resolve plain names via search_launcher_apps first.
+        force: If True, skips the "is it actually unresponsive" pre-check and
+               force-stops unconditionally. Default False runs a quick
+               responsiveness check first and reports if the app seemed fine
+               (still proceeds with the restart either way, just reports more).
+    """
+    from jarvis.tools.ui_inspect import _resolve_local_target
+
+    if " → " in package_name:
+        package_name = package_name.split(" → ")[-1].strip()
+    package_name = package_name.strip()
+
+    was_running = _is_app_running(package_name)
+    pre_pid = _get_app_pid(package_name) if was_running else ""
+
+    note = ""
+    if was_running and not force:
+        # Quick liveness signal: a healthy foreground app should respond to a
+        # dumpsys query almost instantly. This is best-effort, not a hard
+        # diagnosis -- we restart regardless, this just informs the message.
+        fg = _get_foreground_package()
+        if fg != package_name:
+            note = " (app was running in the background, not foreground, when restarted)"
+
+    # force-stop has to go through the real Android activity manager via
+    # adb shell -- Termux's own local 'am' binary (which open_app's bare
+    # 'am start' calls rely on) does NOT implement force-stop at all and
+    # will print its own help text instead of failing cleanly. Routing
+    # through the resolved self-ADB target reuses the same loopback
+    # connection (127.0.0.1:5555) that ui_inspect.py and devices_ext.py
+    # already depend on for shell access to the real system am.
+    target = _resolve_local_target()
+    if not target:
+        return (
+            f"Could not establish an ADB link to force-stop {package_name}. "
+            "Make sure Wireless Debugging / self-ADB loopback is connected."
+        )
+
+    print(f"{COLOR_GRAY}[Force-stopping {package_name} (pid={pre_pid or 'n/a'})...]{COLOR_RESET}")
+    stop_res = subprocess.run(
+        ["adb", "-s", target, "shell", "am", "force-stop", package_name],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10
+    )
+    stop_out = (stop_res.stdout + stop_res.stderr).strip()
+    if stop_res.returncode != 0 or "Exception" in stop_out or "unknown command" in stop_out.lower():
+        return f"force-stop failed for {package_name}: {stop_out or 'no output'}"
+
+    print(f"{COLOR_GRAY}[Relaunching {package_name}...]{COLOR_RESET}")
+    # Clear the cached activity component before relaunch is unnecessary --
+    # open_app's brute-force probing already re-validates it, and a stale
+    # cache hit is the fast/common path. open_app handles cold-launch +
+    # render-wait for us, so we don't duplicate that logic here.
+    relaunch_result = open_app(package_name)
+
+    summary = f"Restarted {package_name} (was {'running, pid=' + pre_pid if was_running else 'not running'}{note})."
+    return f"{summary}\n{relaunch_result}"
+
+
+def get_crash_diagnostics(package_name: str = "", lines: int = 200) -> str:
+    """Reads recent Android system logs (logcat) and surfaces crash/freeze
+    signals for diagnosis. Use this after an app crashes, freezes, or closes
+    unexpectedly, when the user asks "why did that crash" or "what just
+    happened" about an app.
+
+    This is read-only and diagnostic ONLY -- it does not restart or fix
+    anything. Pair it with restart_app if the user wants the app recovered
+    after you've reported what went wrong.
+
+    Args:
+        package_name: App package to filter for (e.g. com.google.android.youtube).
+                      If blank, scans the whole recent log buffer for ANY
+                      crash/ANR signal system-wide instead of one app.
+        lines: How many recent logcat lines to scan (default 200). Raise this
+               if the crash happened a while ago and got pushed out of the
+               most recent lines.
+
+    Returns a short plain-text summary: what crashed (if identifiable), the
+    exception type/message if a FATAL EXCEPTION was found, or an ANR
+    (App Not Responding) notice -- not the raw log dump, which is usually
+    too noisy to be useful directly.
+    """
+    from jarvis.tools.ui_inspect import _resolve_local_target
+
+    target = _resolve_local_target()
+    if not target:
+        return "Could not establish an ADB link to read logcat. Make sure self-ADB loopback is connected."
+
+    try:
+        res = subprocess.run(
+            ["adb", "-s", target, "logcat", "-d", "-t", str(lines)],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=15
+        )
+    except subprocess.TimeoutExpired:
+        return "Error: logcat read timed out."
+    except Exception as e:
+        return f"Error reading logcat: {e}"
+
+    raw_lines = res.stdout.splitlines()
+    if not raw_lines:
+        return "No recent log output available (logcat buffer may have been cleared)."
+
+    pkg_filter = package_name.strip()
+    if pkg_filter:
+        # Crash/ANR lines reference the package name, but not every line in
+        # the relevant block does (e.g. the actual exception stack trace
+        # lines under "FATAL EXCEPTION" usually don't repeat the package).
+        # So: find anchor lines that mention the package, then also pull in
+        # any FATAL EXCEPTION / ANR blocks regardless of whether they
+        # mention the package by name, since those are rare enough system-
+        # wide that a false positive is unlikely and a false negative (the
+        # actual crash you're looking for) is worse.
+        relevant = [
+            l for l in raw_lines
+            if pkg_filter in l
+            or "FATAL EXCEPTION" in l
+            or "ANR in" in l
+            or "Process: " in l
+        ]
+    else:
+        relevant = [
+            l for l in raw_lines
+            if "FATAL EXCEPTION" in l or "ANR in" in l or "Force finishing activity" in l
+        ]
+
+    if not relevant:
+        scope = f"for {pkg_filter}" if pkg_filter else "system-wide"
+        return f"No crash, ANR, or force-stop signals found in the last {lines} log lines {scope}."
+
+    # Surface the most recent crash signal first, since that's almost always
+    # what the user is asking about.
+    fatal_idx = None
+    for i in range(len(relevant) - 1, -1, -1):
+        if "FATAL EXCEPTION" in relevant[i]:
+            fatal_idx = i
+            break
+
+    if fatal_idx is not None:
+        block = relevant[fatal_idx:fatal_idx + 12]
+        return "Crash detected:\n" + "\n".join(block)
+
+    anr_idx = None
+    for i in range(len(relevant) - 1, -1, -1):
+        if "ANR in" in relevant[i]:
+            anr_idx = i
+            break
+    if anr_idx is not None:
+        block = relevant[anr_idx:anr_idx + 8]
+        return "App Not Responding (ANR) detected:\n" + "\n".join(block)
+
+    # Matched the package but no clean FATAL/ANR marker -- return the most
+    # recent handful of matching lines as a best-effort signal.
+    return "Possible issue (no clean crash/ANR marker, showing recent matches):\n" + "\n".join(relevant[-12:])

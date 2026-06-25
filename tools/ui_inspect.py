@@ -207,7 +207,39 @@ def input_my_screen(action: str = "tap", params_json: str = "{}") -> str:
     import json
 
     try:
-        params = json.loads(params_json)
+        if isinstance(params_json, dict):
+            params = params_json
+        elif isinstance(params_json, str):
+            stripped = params_json.strip()
+            if stripped.startswith("{"):
+                params = json.loads(stripped)
+            elif action == "text":
+                # LLM passed the text value directly instead of {"text": "..."}
+                params = {"text": params_json}
+            elif action in ("tap", "long_press"):
+                # Shouldn't be a bare string, but handle gracefully
+                params = json.loads(stripped) if stripped.startswith("{") else {}
+            elif action == "keyevent":
+                # LLM passed the code as a bare string
+                params = {"code": int(stripped)} if stripped.isdigit() else json.loads(stripped)
+            else:
+                params = json.loads(stripped)
+        elif isinstance(params_json, int):
+            # LLM passed a bare int — most likely a keyevent code
+            params = {"code": params_json} if action == "keyevent" else {"x": params_json}
+        elif isinstance(params_json, list):
+            # LLM passed [x, y] — map to tap/swipe coords
+            if action in ("tap", "long_press") and len(params_json) >= 2:
+                params = {"x": params_json[0], "y": params_json[1]}
+            elif action == "swipe" and len(params_json) >= 4:
+                params = {"x1": params_json[0], "y1": params_json[1],
+                          "x2": params_json[2], "y2": params_json[3]}
+            else:
+                params = {}
+        else:
+            params = {}
+        if not isinstance(params, dict):
+            return f"Invalid params_json: expected a JSON object (dict), got {type(params).__name__}. Example: '{{\"code\": 3}}'"
     except Exception as e:
         return f"Invalid params_json: {e}"
 
@@ -265,3 +297,88 @@ def input_my_screen(action: str = "tap", params_json: str = "{}") -> str:
     if res.returncode == 0:
         return f"input_my_screen: {action} executed successfully."
     return f"input_my_screen failed: {res.stderr.strip() or res.stdout.strip()}"
+
+
+def _parse_bounds(bounds: str) -> tuple[int, int, int, int] | None:
+    """Parses a uiautomator bounds string '[x1,y1][x2,y2]' into (x1, y1, x2, y2).
+    Returns None if the string cannot be parsed."""
+    import re
+    m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', bounds.strip())
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+
+
+def ui_tap_element(query: str, target_ip: str = "", match_by: str = "text",
+                   occurrence: int = 1) -> str:
+    """Finds an element on the current screen by text or resource-id and taps
+    its exact center. This is the PREFERRED way to tap buttons, search bars,
+    and input fields — it eliminates coordinate math errors entirely.
+
+    Args:
+        query:      The text label or resource-id fragment to match.
+                    Examples: "Search", "search_bar", "search_edit_text"
+        target_ip:  ADB target. Leave blank for this device.
+        match_by:   "text" to match against visible labels/content-desc (default),
+                    "id"   to match against the resource-id fragment.
+        occurrence: Which match to tap when multiple elements match (1 = first).
+
+    Returns a status string. On success: 'Tapped "<label>" at (cx, cy).'
+    On failure: a description of what went wrong.
+
+    Workflow example for searching YouTube:
+        ui_tap_element("Search")          # taps the search bar by label
+        input_my_screen("text", {"text": "lofi hip hop"})
+        input_my_screen("keyevent", {"code": 66})   # Enter
+    """
+    target = _resolve_local_target(target_ip)
+    if not target:
+        return "Could not establish an ADB link."
+
+    xml_data = _fetch_ui_xml(target)
+    if not xml_data:
+        return "Failed to read the screen contents."
+
+    elements = _parse_elements(xml_data, only_interactive=False)
+    query_lower = query.lower().strip()
+
+    if match_by == "id":
+        matches = [el for el in elements
+                   if query_lower in el["resource_id"].lower()]
+    else:
+        matches = [el for el in elements
+                   if query_lower in el["text"].lower()]
+
+    if not matches:
+        # Second-pass: try both fields before giving up
+        matches = [el for el in elements
+                   if query_lower in el["text"].lower()
+                   or query_lower in el["resource_id"].lower()]
+
+    if not matches:
+        return (f"No element matching '{query}' found on screen. "
+                f"Call ui_dump to see what's available.")
+
+    idx = max(0, occurrence - 1)
+    if idx >= len(matches):
+        idx = len(matches) - 1
+    el = matches[idx]
+
+    coords = _parse_bounds(el["bounds"])
+    if not coords:
+        return (f"Found element '{el['text'] or el['resource_id']}' but "
+                f"could not parse its bounds: {el['bounds']}")
+
+    x1, y1, x2, y2 = coords
+    cx = (x1 + x2) // 2
+    cy = (y1 + y2) // 2
+
+    import subprocess as _sp
+    adb_base = ["adb", "-s", target, "shell"]
+    res = _sp.run(adb_base + ["input", "tap", str(cx), str(cy)],
+                  capture_output=True, text=True, stdin=_sp.DEVNULL)
+    if res.returncode != 0:
+        return f"Tap failed: {res.stderr.strip() or res.stdout.strip()}"
+
+    label = el["text"] or el["resource_id"] or query
+    return f'Tapped "{label}" at ({cx}, {cy}).'

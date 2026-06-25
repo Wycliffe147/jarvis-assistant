@@ -1,5 +1,6 @@
 import sys
 import time
+import subprocess
 from jarvis.config import COLOR_GREEN, COLOR_YELLOW, COLOR_GRAY, COLOR_BLUE, COLOR_CYAN, COLOR_RED, COLOR_RESET
 from jarvis.history import load_persistent_history, save_persistent_history
 from jarvis.cache.music_cache import _load_music_cache, _save_music_cache, _scan_music_files
@@ -7,6 +8,7 @@ from jarvis.voice import listen_for_wake_word, get_voice_input
 from jarvis.tools.device import vibrate
 from jarvis.tools.media import speak
 from jarvis.tools.link import link_start_server
+from jarvis.tools.devices_ext import adb_self_connect
 from jarvis.ai import call_ai, build_messages
 from jarvis.handler import handle_response, execute_text_command, classify_local_intent
 
@@ -141,6 +143,22 @@ def main():
         print(f"{COLOR_GRAY}[{status_msg}]{COLOR_RESET}")
     except Exception as e:
         print(f"{COLOR_RED}[Failed to start Jarvis Link: {e}]{COLOR_RESET}")
+
+    # Silently attempt self-ADB loopback connect for screen control features.
+    # If it fails, wireless debugging is off — open the settings screen and prompt.
+    if adb_self_connect():
+        print(f"{COLOR_GRAY}[Self-ADB connected on 127.0.0.1:5555]{COLOR_RESET}")
+    else:
+        print(f"{COLOR_YELLOW}[Self-ADB unavailable — wireless debugging is off]{COLOR_RESET}")
+        try:
+            subprocess.run(
+                ["am", "start", "-n",
+                 "com.android.settings/.Settings$WirelessDebuggingActivity"],
+                stdin=subprocess.DEVNULL, capture_output=True
+            )
+        except Exception:
+            pass
+        speak("Wireless debugging is off. I've opened the settings — please enable it so I can control the screen.")
 
     if len(sys.argv) > 1:
         command_str = " ".join(sys.argv[1:])

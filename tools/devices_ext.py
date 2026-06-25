@@ -101,6 +101,23 @@ def adb_connect(target_ip: str, port: int = 5555) -> str:
         _try_remember_serial_for_target(addr)
     return out
 
+def adb_self_connect() -> bool:
+    """Silently attempts to connect this phone to itself via loopback ADB (127.0.0.1:5555).
+    Called on Jarvis startup. Returns True if connected, False if wireless debugging is off.
+    Does not raise — safe to call unconditionally."""
+    try:
+        subprocess.run(["adb", "start-server"], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5)
+        res = subprocess.run(["adb", "connect", "127.0.0.1:5555"], capture_output=True, text=True,
+                             stdin=subprocess.DEVNULL, timeout=5)
+        out = res.stdout.strip().lower()
+        if "connected to" in out or "already connected" in out:
+            _set_default_adb_target("127.0.0.1:5555")
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def adb_disconnect(target_ip: str = "") -> str:
     """Disconnects the ADB link from target device(s)."""
     cmd = ["adb", "disconnect"]
@@ -412,7 +429,32 @@ def adb_command(target_ip: str = "", action: str = "tap", params_json: str = "{}
     """
     import json
     try:
-        params = json.loads(params_json)
+        if isinstance(params_json, dict):
+            params = params_json
+        elif isinstance(params_json, str):
+            stripped = params_json.strip()
+            if stripped.startswith("{"):
+                params = json.loads(stripped)
+            elif action == "text":
+                params = {"text": params_json}
+            elif action == "keyevent":
+                params = {"code": int(stripped)} if stripped.isdigit() else json.loads(stripped)
+            else:
+                params = json.loads(stripped)
+        elif isinstance(params_json, int):
+            params = {"code": params_json} if action == "keyevent" else {"x": params_json}
+        elif isinstance(params_json, list):
+            if action in ("tap",) and len(params_json) >= 2:
+                params = {"x": params_json[0], "y": params_json[1]}
+            elif action == "swipe" and len(params_json) >= 4:
+                params = {"x1": params_json[0], "y1": params_json[1],
+                          "x2": params_json[2], "y2": params_json[3]}
+            else:
+                params = {}
+        else:
+            params = {}
+        if not isinstance(params, dict):
+            return f"Invalid parameters JSON: expected a dict, got {type(params).__name__}"
     except Exception as e:
         return f"Invalid parameters JSON: {e}"
 
@@ -449,7 +491,7 @@ def adb_command(target_ip: str = "", action: str = "tap", params_json: str = "{}
         txt = params.get("text", "")
         # Escape spaces for adb input
         txt_escaped = txt.replace(" ", "%s")
-        cmd = adb_base + ["input", "text", f"'{txt_escaped}'"]
+        cmd = adb_base + ["input", "text", txt_escaped]
     elif action == "keyevent":
         code = params.get("code", 3)  # Default Home key
         cmd = adb_base + ["input", "keyevent", str(code)]

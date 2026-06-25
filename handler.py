@@ -332,8 +332,48 @@ def handle_response(response_gen, history: deque, messages: list, _depth: int = 
 
     display = "\n".join(final_results) if final_results else full_text
 
+    # Guard against "narrated but didn't act": on the very first pass for a
+    # command (_depth == 0), the model sometimes just speaks a description
+    # of what it's about to do (e.g. "Opening YouTube and searching...")
+    # without calling any tool at all. With no tool_outputs, the DATA_TOOLS
+    # follow-up logic below never triggers, so that narration would
+    # otherwise be accepted as the final answer -- a guess presented as a
+    # completed action. Give the model exactly one forced retry that makes
+    # it call a real tool instead of just speaking. Only applies at
+    # _depth == 0; deeper passes are themselves the "speak the final
+    # summary" step of an already-executed chain and are expected to end
+    # in a tool-less speak.
+    if _depth == 0 and not tool_outputs:
+        print(f"\n{COLOR_GRAY}[No tool call detected -- forcing action...]{COLOR_RESET}")
+        retry_messages = messages + [
+            {"role": "assistant", "content": full_text},
+            {
+                "role": "user",
+                "content": (
+                    "You did not call any tool -- you only spoke a description of what you intend to do. "
+                    "Speaking an intention is not the same as doing it. "
+                    "Call the actual tool needed to perform this task now. Do not call 'speak' until "
+                    "you have called at least one other tool and seen its result."
+                )
+            }
+        ]
+        retry_gen = call_ai(retry_messages)
+        retry_display, retry_full = handle_response(retry_gen, history, retry_messages, _depth=_depth + 1)
+        return retry_display, full_text + "\n" + retry_full
+
     data_results = [t for t in tool_outputs if t["tool"] in DATA_TOOLS]
-    if data_results and _depth < 3:
+
+    # UI-automation chains (open app -> tap -> type -> verify -> tap result...)
+    # routinely need more reasoning turns than a single data lookup. Give
+    # those a higher ceiling than the default 3, since a multi-step task
+    # like "search X and play the first result" can easily need 5-7 turns
+    # of "act, look at the screen, decide next action" before it's actually
+    # done -- the old fixed limit of 3 was cutting these off mid-task.
+    UI_TOOLS = {"ui_dump", "ui_find_text", "ui_tap_element", "input_my_screen"}
+    is_ui_chain = any(t["tool"] in UI_TOOLS for t in tool_outputs)
+    max_depth = 8 if is_ui_chain else 3
+
+    if data_results and _depth < max_depth:
         print(f"\n{COLOR_GRAY}[Analyzing data results...]{COLOR_RESET}")
         # Forward ALL tool results from this turn, not just the DATA_TOOLS
         # ones. Otherwise, if a turn calls e.g. adb_list_devices (a data

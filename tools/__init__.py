@@ -5,11 +5,11 @@ from jarvis.tools.comms import send_sms, list_sms, get_call_log, get_contacts, f
 from jarvis.tools.system import get_clipboard, set_clipboard, show_notification, remove_notification, set_wallpaper, show_dialog, fingerprint_auth, show_toast, share
 from jarvis.tools.network import open_url, get_wifi_info, scan_wifi, set_wifi, get_location, get_device_info, get_cell_info, search_nearby, web_search, deep_read
 from jarvis.tools.camera import take_photo, analyze_photo, local_ocr, read_my_screen, ocr_my_screen, screenshot_my_screen
-from jarvis.tools.apps import list_apps, open_app, search_launcher_apps
+from jarvis.tools.apps import list_apps, open_app, search_launcher_apps, restart_app, get_crash_diagnostics
 from jarvis.tools.link import link_start_server, link_status, link_scan, link_send_message, link_send_command, link_send_file, link_sync_clipboard
 from jarvis.tools.devices_ext import open_bluetooth_settings, adb_connect, adb_disconnect, adb_pair_device, adb_list_devices, adb_command, adb_screenshot, adb_mdns_reconnect, adb_mirror_device, adb_stop_mirror, dlna_scan, dlna_cast, dlna_stop
 from jarvis.tools.hotspot import hotspot_enable, hotspot_disable, hotspot_open_settings, hotspot_status, hotspot_scan_clients, hotspot_adb_autoconnect
-from jarvis.tools.ui_inspect import ui_dump, ui_find_text, input_my_screen
+from jarvis.tools.ui_inspect import ui_dump, ui_find_text, input_my_screen, ui_tap_element
 from jarvis.tools.notifications import list_notifications, get_latest_notification
 from jarvis.tools.app_settings import get_battery_diagnostics, get_system_setting, set_system_setting, get_app_info, clear_app_data
 
@@ -53,6 +53,8 @@ TOOLS = {
     "list_apps":           list_apps,
     "open_app":            open_app,
     "search_launcher_apps": search_launcher_apps,
+    "restart_app":          restart_app,
+    "get_crash_diagnostics": get_crash_diagnostics,
     "find_music":          find_music,
     "play_media":          play_media,
     "stop_media":          stop_media,
@@ -102,6 +104,7 @@ TOOLS = {
     "hotspot_adb_autoconnect": hotspot_adb_autoconnect,
     "ui_dump":             ui_dump,
     "ui_find_text":        ui_find_text,
+    "ui_tap_element":      ui_tap_element,
     "input_my_screen":     input_my_screen,
     "list_notifications":  list_notifications,
     "get_latest_notification": get_latest_notification,
@@ -120,7 +123,13 @@ DATA_TOOLS = {
     "find_music", "find_contact", "analyze_photo", "local_ocr", "read_my_screen", "ocr_my_screen", "list_apps",
     "search_launcher_apps", "web_search", "deep_read", "link_status", "link_scan",
     "dlna_scan", "adb_list_devices", "adb_pair_device", "adb_mdns_reconnect",
-    "hotspot_status", "hotspot_scan_clients"
+    "hotspot_status", "hotspot_scan_clients", "get_crash_diagnostics",
+    # UI navigation: ui_dump and input_my_screen return screen state that the
+    # model must reason about before continuing. Marking them as DATA_TOOLS
+    # ensures every tap triggers the follow-up pass, which feeds the new screen
+    # state back to the model so it can verify the action succeeded and retry
+    # if the wrong element was hit (e.g. scrolled instead of tapping search).
+    "ui_dump", "ui_find_text", "ui_tap_element", "input_my_screen",
 }
 
 TOOLS_DESCRIPTION = """
@@ -160,6 +169,8 @@ screenshot_my_screen()           - Captures a screenshot of THIS phone's screen 
 list_apps(search_query)          - List third party installed app package identifiers via 'cmd package list'.
 search_launcher_apps(query)      - Fast checks or sweeps system package listings to translate plain app names (e.g. 'YouTube') into verified package strings. Always call this first when an explicit package identifier isn't known.
 open_app(package_name)           - Launch an app and wait for it to fully render. Returns the initial screen state (ui_dump snapshot) so you can act immediately — do NOT call ui_dump again right after open_app, the screen state is already in the response.
+restart_app(package_name, force) - Force-stops an app (killing its process, resetting its state) and relaunches it fresh. Use when an app is frozen, unresponsive, stuck on a black/loading screen, or misbehaving in a way open_app (which just brings an existing instance forward) won't fix. Use search_launcher_apps first if only the display name is known.
+get_crash_diagnostics(package_name, lines) - READ-ONLY. Scans recent Android system logs (logcat) for crash (FATAL EXCEPTION) or freeze (ANR) signals. Use when the user asks "why did that crash" or an app just closed/froze unexpectedly. Leave package_name blank to scan system-wide. Does not fix anything — pair with restart_app if recovery is also wanted.
 find_music(query, refresh_cache) - Search for audio files across internal storage.
 play_media(file)                 - Open and play a file in Muso Music Player (requires full path).
 pause_media()                    - Toggle play/pause in the active media session
@@ -195,9 +206,10 @@ adb_pair_device(target_ip, pairing_port, pairing_code) - Pair a brand new device
 adb_list_devices()               - List all currently connected ADB devices by identifier and model. Always call this first when the user asks to control another phone/device via ADB.
 adb_command(target_ip, action, params_json) - Send a command (tap, swipe, text, keyevent, launch, shell) to ADB target phone. Provide arguments as stringified JSON.
 adb_screenshot(target_ip, filename) - Takes a screenshot of the ADB target device and pulls it to the local Downloads folder.
-ui_dump(target_ip, only_interactive) - READ-ONLY. Lists the text labels and buttons currently visible on screen (with positions), e.g. for "what's on screen", "what buttons are visible", "list clickable elements". Does NOT tap, type, or interact in any way — for that, use adb_command instead. only_interactive defaults to True (buttons/links only); set False to also see static text.
-ui_find_text(query, target_ip) - READ-ONLY. Checks whether a specific label/button is currently visible on screen (e.g. "is there a Save button"), case-insensitive partial match. Does NOT tap or interact — for that, use adb_command instead.
-input_my_screen(action, params_json) - Sends touch/keyboard input to THIS phone's screen. Actions: tap {x,y}, swipe {x1,y1,x2,y2,duration_ms}, text {text}, keyevent {code}, long_press {x,y,duration_ms}, shell {cmd}. Use coordinates from ui_dump's bounds. Combine with ui_dump/read_my_screen to navigate any app: read → decide → tap → read again → repeat. Key codes: 3=Home, 4=Back, 26=Power, 66=Enter, 67=Backspace, 187=Recents.
+ui_dump(target_ip, only_interactive) - READ-ONLY. Lists text labels, buttons, and their bounds on screen. Use to survey what's visible or to get raw coordinates for swipes. Does NOT tap or interact. only_interactive defaults to True; set False to see static text too.
+ui_find_text(query, target_ip) - READ-ONLY. Checks if a specific label is visible on screen, partial match. Does NOT tap or interact.
+ui_tap_element(query, target_ip, match_by, occurrence) - PREFERRED TAP METHOD. Finds an element by text or resource-id fragment and taps its exact center automatically — no coordinate math needed. match_by="text" (default) or "id". occurrence=1 (default) for first match. Use this for all button/field taps. Example: ui_tap_element("Search") taps the Search bar by label; ui_tap_element("search_edit_text", match_by="id") taps by resource-id.
+input_my_screen(action, params_json) - Sends touch/keyboard input to THIS phone's screen. Use ui_tap_element for element tapping. Use input_my_screen for: text entry {text}, key events {code}, swipes {x1,y1,x2,y2,duration_ms}, or raw taps when no element label is available. Key codes: 3=Home, 4=Back, 26=Power, 66=Enter, 67=Backspace, 187=Recents.
 list_notifications(target_ip, app_filter, limit) - READ-ONLY. Lists currently-posted notifications (app, title, text), most recent first. Does NOT dismiss, open, or reply to any notification. app_filter is an optional partial package name (e.g. "whatsapp") to narrow results; limit defaults to 10.
 get_latest_notification(target_ip, app_filter) - READ-ONLY. Returns just the single most recent notification, optionally filtered to one app (e.g. "what's my last WhatsApp message"). Does NOT dismiss, open, or reply to it.
 get_battery_diagnostics(target_ip) - READ-ONLY. Deeper battery info than get_battery_status: voltage, charge current, technology, health. Use for "why is my battery draining" type questions.
