@@ -52,7 +52,15 @@ def _stream_response(r):
     NOTE: with include_reasoning=False set in call_ai, reasoning_content should
     rarely appear. This fallback is a safety net only — do not rely on it for
     tool-call parsing, since reasoning text is not guaranteed to contain a
-    well-formed final answer or JSON tool-call."""
+    well-formed final answer or JSON tool-call.
+
+    Debug: set env var JARVIS_DEBUG_RAW=1 to print every raw SSE chunk
+    (including delta.reasoning, finish_reason, etc.) to stderr as it
+    arrives, unmodified — useful for seeing exactly what a provider sent
+    when behavior looks wrong but no error is raised. This is purely
+    diagnostic and does not change what gets yielded downstream."""
+    import os
+    debug_raw = os.environ.get("JARVIS_DEBUG_RAW") == "1"
     for line in r.iter_lines():
         if not line:
             continue
@@ -62,6 +70,9 @@ def _stream_response(r):
         data_part = line_str[6:]
         if data_part == "[DONE]":
             break
+        if debug_raw:
+            import sys as _sys
+            print(f"[RAW CHUNK] {data_part}", file=_sys.stderr, flush=True)
         try:
             chunk = json.loads(data_part)
             delta = chunk["choices"][0]["delta"]
@@ -81,12 +92,26 @@ def _apply_gpt_oss_params(payload: dict, model: str):
     serving the model. Cerebras's API supports the standard reasoning_effort
     parameter but rejects include_reasoning entirely (400: unsupported) --
     that param is specific to other gpt-oss hosts (e.g. Groq's), not part
-    of Cerebras's API surface."""
+    of Cerebras's API surface. Cerebras's equivalent for keeping reasoning
+    text out of `content` is `reasoning_format` (a DIFFERENT param name,
+    same purpose) -- but the value matters: "none" is a NO-OP for gpt-oss
+    (it just means "use the model's default format", which for gpt-oss is
+    "raw" -- reasoning concatenated directly into content with NO
+    separator, since gpt-oss has no <think> tokens to wrap it in). That
+    default is what caused raw chain-of-thought ("We need to first
+    speak...", "Let's output tool calls...") to leak into stdout and get
+    fed back into the tool-call parser. reasoning_format="parsed" is the
+    value that actually routes reasoning into its own `reasoning` delta
+    field, separate from `content`. _stream_response already ignores that
+    field by design (it only reads `content`/`reasoning_content` as a
+    last-resort fallback, per its own docstring)."""
     if "gpt-oss" not in model:
         return
     payload["reasoning_effort"] = "low"
     if model != MODEL_CEREBRAS_FALLBACK:
         payload["include_reasoning"] = False
+    else:
+        payload["reasoning_format"] = "parsed"
 
 
 def _endpoint_for(model: str) -> tuple[str, dict]:
@@ -137,6 +162,24 @@ def call_ai(messages: list, stream: bool = True):
     url, headers = _endpoint_for(model)
     payload = {"model": model, "messages": messages, "max_tokens": 800, "stream": stream}
     _apply_gpt_oss_params(payload, model)
+
+    if os.environ.get("JARVIS_DEBUG_RAW") == "1":
+        import sys as _sys
+        print(f"[REQUEST] model={model} num_messages={len(messages)}", file=_sys.stderr, flush=True)
+        for i, m in enumerate(messages):
+            role = m.get("role", "?")
+            content = m.get("content", "")
+            preview = content if isinstance(content, str) else str(content)
+            # The system prompt is large and identical on every single request
+            # (it never changes mid-conversation), so printing it in full each
+            # time just buries the parts that actually vary. Truncate ONLY
+            # this one role; every other message (user/assistant/tool-result
+            # feedback) is printed completely untruncated, since seeing the
+            # full real ui_dump/ui_tap_element content -- not a 500-char
+            # preview of it -- is the whole point of this debug log.
+            if role == "system" and len(preview) > 300:
+                preview = preview[:300] + f"...[system prompt truncated, {len(preview)} chars total -- unchanged each request]"
+            print(f"[REQUEST]   [{i}] role={role}: {preview}", file=_sys.stderr, flush=True)
 
     try:
         r = _post(payload, headers, stream, url=url)

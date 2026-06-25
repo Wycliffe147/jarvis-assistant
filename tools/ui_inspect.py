@@ -29,27 +29,46 @@ def _resolve_local_target(target_ip: str = "") -> str | None:
 
 def _fetch_ui_xml(target: str) -> str | None:
     """Dumps the current UI hierarchy on the target device and returns the
-    raw XML as a string, or None on failure."""
-    dump_res = subprocess.run(
-        ["adb", "-s", target, "shell", "uiautomator", "dump", DUMP_REMOTE_PATH],
-        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=15
-    )
-    if dump_res.returncode != 0:
-        return None
+    raw XML as a string, or None on failure.
 
-    cat_res = subprocess.run(
-        ["adb", "-s", target, "shell", "cat", DUMP_REMOTE_PATH],
-        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10
-    )
-    # Best-effort cleanup of the temp file on the device
-    subprocess.run(
-        ["adb", "-s", target, "shell", "rm", "-f", DUMP_REMOTE_PATH],
-        stdin=subprocess.DEVNULL, timeout=10
-    )
+    Retries once after a short delay before giving up. The most common
+    cause of a failed dump in practice is NOT a locked/sleeping screen --
+    it's a timing race immediately after a navigation action (e.g. a BACK
+    keyevent or app switch), where uiautomator's dump service queries the
+    window manager before the new window/activity has fully settled. That
+    race is transient and usually resolves within a second, so one retry
+    with a brief pause clears the large majority of these without ever
+    surfacing an error at all."""
+    import time
 
-    if cat_res.returncode != 0 or not cat_res.stdout.strip():
-        return None
-    return cat_res.stdout
+    def _attempt() -> str | None:
+        dump_res = subprocess.run(
+            ["adb", "-s", target, "shell", "uiautomator", "dump", DUMP_REMOTE_PATH],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=15
+        )
+        if dump_res.returncode != 0:
+            return None
+
+        cat_res = subprocess.run(
+            ["adb", "-s", target, "shell", "cat", DUMP_REMOTE_PATH],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10
+        )
+        # Best-effort cleanup of the temp file on the device
+        subprocess.run(
+            ["adb", "-s", target, "shell", "rm", "-f", DUMP_REMOTE_PATH],
+            stdin=subprocess.DEVNULL, timeout=10
+        )
+
+        if cat_res.returncode != 0 or not cat_res.stdout.strip():
+            return None
+        return cat_res.stdout
+
+    result = _attempt()
+    if result is not None:
+        return result
+
+    time.sleep(0.8)
+    return _attempt()
 
 
 def _parse_elements(xml_data: str, only_interactive: bool) -> list[dict]:
@@ -106,7 +125,7 @@ def ui_dump(target_ip: str = "", only_interactive: bool = True) -> str:
 
     xml_data = _fetch_ui_xml(target)
     if not xml_data:
-        return "Failed to read the screen contents. The device may be locked, asleep, or uiautomator failed to start."
+        return "Could not read the screen contents after retrying. This does not confirm the device is locked or asleep -- it usually means uiautomator's dump service failed for a reason this tool can't determine from here. If this just followed a navigation action (BACK, app switch), try the action again or wait a moment before re-checking."
 
     elements = _parse_elements(xml_data, only_interactive)
     if not elements:
@@ -150,7 +169,7 @@ def ui_find_text(query: str, target_ip: str = "") -> str:
 
     xml_data = _fetch_ui_xml(target)
     if not xml_data:
-        return "Failed to read the screen contents."
+        return "Could not read the screen contents after retrying -- cause unknown (not necessarily locked/asleep). Try again in a moment."
 
     elements = _parse_elements(xml_data, only_interactive=False)
     query_lower = query.lower().strip()
@@ -295,6 +314,16 @@ def input_my_screen(action: str = "tap", params_json: str = "{}") -> str:
 
     res = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     if res.returncode == 0:
+        # Enter (code 66) commonly submits a search or form that triggers a
+        # network-dependent content load (e.g. search results rendering).
+        # Without a brief pause here, a ui_dump called immediately after can
+        # capture the screen mid-load -- before results have actually
+        # rendered -- making a real search look like it returned nothing.
+        # This delay only applies to Enter specifically, not every keyevent,
+        # so BACK/Home/volume etc. stay instant.
+        if action == "keyevent" and params.get("code") == 66:
+            import time
+            time.sleep(1.2)
         return f"input_my_screen: {action} executed successfully."
     return f"input_my_screen failed: {res.stderr.strip() or res.stdout.strip()}"
 
@@ -346,7 +375,7 @@ def ui_tap_element(query: str, target_ip: str = "", match_by: str = "text",
 
     xml_data = _fetch_ui_xml(target)
     if not xml_data:
-        return "Failed to read the screen contents."
+        return "Could not read the screen contents after retrying -- cause unknown (not necessarily locked/asleep). Try again in a moment."
 
     elements = _parse_elements(xml_data, only_interactive=False)
     query_lower = query.lower().strip()
