@@ -348,21 +348,34 @@ def _ensure_adb_connected(target: str) -> bool:
     If direct IP connection fails, tries mDNS discovery (works on any shared network, not just our
     own hotspot), then finally falls back to the hotspot client scan."""
     import re as _re
+    import os as _os
+    debug = _os.environ.get("JARVIS_DEBUG_RAW") == "1"
     subprocess.run(["adb", "start-server"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
     res = subprocess.run(["adb", "devices"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    if debug:
+        import sys as _sys
+        print(f"[ADB_CHECK] target={target!r} returncode={res.returncode} stdout={res.stdout!r} stderr={res.stderr!r}", file=_sys.stderr, flush=True)
     for line in res.stdout.splitlines():
         if target in line and _re.search(r'\bdevice\b', line):
+            if debug:
+                print(f"[ADB_CHECK] matched on first check: {line!r}", file=_sys.stderr, flush=True)
             return True
 
     # For serial IDs (like emulator-5554), don't try to 'adb connect'
     if _is_serial(target):
+        if debug:
+            print(f"[ADB_CHECK] target classified as serial, no match found, returning False without fallback", file=_sys.stderr, flush=True)
         return False
 
     # For IP targets: try connecting directly
     subprocess.run(["adb", "connect", target], capture_output=True, text=True, stdin=subprocess.DEVNULL)
     res2 = subprocess.run(["adb", "devices"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    if debug:
+        print(f"[ADB_CHECK] after 'adb connect {target}': stdout={res2.stdout!r}", file=_sys.stderr, flush=True)
     for line in res2.stdout.splitlines():
         if target in line and _re.search(r'\bdevice\b', line):
+            if debug:
+                print(f"[ADB_CHECK] matched after connect retry: {line!r}", file=_sys.stderr, flush=True)
             return True
 
     # FALLBACK 1: mDNS discovery. Network-agnostic — works whether the device is

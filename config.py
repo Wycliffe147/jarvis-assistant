@@ -5,6 +5,7 @@ load_dotenv()
 
 # --- API Keys ---
 API_KEY = os.getenv("GROQ_API_KEY")
+API_KEY_SECONDARY = os.getenv("GROQ_API_KEY_SECONDARY")  # optional 2nd key, same model as primary, separate quota
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")  # optional third-tier fallback
 
 if not API_KEY:
@@ -28,6 +29,13 @@ URL_WHISPER  = "https://api.groq.com/openai/v1/audio/transcriptions"
 URL_CEREBRAS = "https://api.cerebras.ai/v1/chat/completions"
 
 MODEL_PRIMARY  = "llama-3.3-70b-versatile"
+# Fallback chain, in order: MODEL_PRIMARY (key 1) -> MODEL_PRIMARY (key 2, if
+# GROQ_API_KEY_SECONDARY is set) -> MODEL_CEREBRAS_FALLBACK -> MODEL_FALLBACK.
+# The secondary key step uses the SAME model as primary, just a different
+# Groq account/quota -- it exists purely to squeeze more free-tier capacity
+# out of the strongest available model before dropping down to Cerebras or
+# the much smaller 8b model.
+#
 # llama-3.1-8b-instant: fast, non-reasoning, follows the raw-JSON tool-call protocol
 # more directly than openai/gpt-oss-20b (a reasoning model that kept returning
 # empty content even with reasoning_effort=low / include_reasoning=False).
@@ -38,14 +46,14 @@ MODEL_PRIMARY  = "llama-3.3-70b-versatile"
 # replies, never JSON tool-calls or result scaffolding.
 MODEL_FALLBACK = "llama-3.1-8b-instant"
 MODEL_VISION   = "meta-llama/llama-4-scout-17b-16e-instruct"
-# Second tier: a genuinely separate provider/quota pool, used once the Groq
-# primary (70b) is exhausted for the day. Bigger than MODEL_FALLBACK (120B
+# Third tier: a genuinely separate provider/quota pool, used once BOTH Groq
+# primary keys are exhausted for the day. Bigger than MODEL_FALLBACK (120B
 # vs 8B), and Cerebras's own docs recommend it for agentic/tool-use
 # workloads on their free public endpoint. Shares the same "gpt-oss" branch
-# in call_ai() for reasoning_effort/include_reasoning handling.
+# in call_ai() for reasoning_effort/include_reasoning/reasoning_format handling.
 # MODEL_FALLBACK (Groq 8b) becomes the absolute last resort, only reached
-# once BOTH the Groq primary AND Cerebras are exhausted the same day (or if
-# no CEREBRAS_API_KEY is configured at all).
+# once Groq primary (both keys) AND Cerebras are exhausted the same day (or
+# if no CEREBRAS_API_KEY is configured at all).
 MODEL_CEREBRAS_FALLBACK = "gpt-oss-120b"
 
 # --- Groq Vision config ---
@@ -155,6 +163,12 @@ SYSTEM_PROMPT = (
     'NEVER pass a descriptive phrase like "first result," "the video," "top item," or "search result" as the query — no such text exists on screen and the match will always fail. '
     'Instead: call ui_dump first, read the REAL text/label of the specific element from that output (e.g. the actual video title, button label, or list-item text), and pass that exact (or shortened, distinctive) string as the query. '
     'If multiple items share similar text or none have unique distinguishing labels (e.g. a list of unlabeled thumbnails), use ui_dump\'s bounds for that element directly with input_my_screen("tap", {"x": cx, "y": cy}) instead of guessing at ui_tap_element queries.\n'
+    'TEXT INPUT DEPENDENCY RULE: Never send input_my_screen("text", ...) immediately after a ui_tap_element call without confirming that tap actually succeeded. '
+    'input_my_screen("text", ...) does not tap or focus anything itself — it only sends keystrokes to whatever is ALREADY focused. If the preceding ui_tap_element result was a failure ("No element matching... found on screen"), nothing is focused, and sending text anyway has no defined target: it may do nothing, or it may be absorbed by the screen\'s default keyboard-navigation behavior (e.g. scrolling a focused list), producing an unrequested side effect — like the screen scrolling on its own — that has nothing to do with the search you intended. '
+    'Always check the tap\'s result before sending dependent text input: if the tap failed, ui_dump again and retry the tap with a corrected query first; only send text once a tap has actually succeeded.\n'
+    'TARGET_IP RULE: Leave target_ip blank/omitted on ui_dump, ui_tap_element, and input_my_screen when controlling THIS phone (the one Jarvis is running on) — do NOT fill it in with a guessed value like "localhost", "127.0.0.1", or any IP. '
+    'Leaving it blank triggers this tool\'s own correct auto-detection of the right local target. Supplying any string yourself, even a plausible-sounding one, skips that auto-detection and is matched literally against real adb devices output, where it will not match anything and the call will fail outright. '
+    'Only pass an explicit target_ip when the user is referring to a different, external phone (see EXTENDED DEVICES RULE below) and you have its real IP from adb_list_devices.\n'
     'JARVIS LINK RULE: To connect and communicate with nearby devices, you can scan the local network using "link_scan". Always ensure the server is active by checking "link_status" or starting it with "link_start_server". You can send text transmissions using "link_send_message", execute remote actions (like vibrate, speak, torch) using "link_send_command", transfer files using "link_send_file", or synchronize clipboards using "link_sync_clipboard".\n'
     'EXTENDED DEVICES RULE: ADB and Jarvis Link are DIFFERENT systems. '
     'ADB controls any Android phone with Wireless Debugging enabled — it does NOT require Jarvis on the other phone. '

@@ -3,7 +3,7 @@ import os
 import json
 from collections import deque
 from datetime import date
-from jarvis.config import API_KEY, URL_CHAT, URL_WHISPER, MODEL_PRIMARY, MODEL_FALLBACK, SYSTEM_PROMPT, COLOR_YELLOW, COLOR_RESET, COLOR_RED, CEREBRAS_API_KEY, URL_CEREBRAS, MODEL_CEREBRAS_FALLBACK
+from jarvis.config import API_KEY, API_KEY_SECONDARY, URL_CHAT, URL_WHISPER, MODEL_PRIMARY, MODEL_FALLBACK, SYSTEM_PROMPT, COLOR_YELLOW, COLOR_RESET, COLOR_RED, CEREBRAS_API_KEY, URL_CEREBRAS, MODEL_CEREBRAS_FALLBACK
 from jarvis.tools.media import speak
 from jarvis.tools import TOOLS_DESCRIPTION
 
@@ -114,13 +114,19 @@ def _apply_gpt_oss_params(payload: dict, model: str):
         payload["reasoning_format"] = "parsed"
 
 
-def _endpoint_for(model: str) -> tuple[str, dict]:
+def _endpoint_for(model: str, key_override: str = None) -> tuple[str, dict]:
     """Returns (url, headers) for the given model. Cerebras is a genuinely
     separate provider with its own base URL and API key — everything else
-    (Groq primary/fallback) shares Groq's endpoint and key."""
+    (Groq primary/secondary/fallback) shares Groq's endpoint.
+
+    key_override lets the caller force a specific Groq API key even though
+    the model string is identical to primary's (used for the secondary
+    llama-3.3-70b-versatile fallback, which is the same model on a separate
+    Groq account/quota, not a different model)."""
     if model == MODEL_CEREBRAS_FALLBACK:
         return URL_CEREBRAS, {"Authorization": f"Bearer {CEREBRAS_API_KEY}", "Content-Type": "application/json"}
-    return URL_CHAT, {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+    key = key_override or API_KEY
+    return URL_CHAT, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
 
 def _post(payload, headers, stream, url=URL_CHAT):
@@ -184,22 +190,36 @@ def call_ai(messages: list, stream: bool = True):
     try:
         r = _post(payload, headers, stream, url=url)
 
+        # --- Tier 2: same model (MODEL_PRIMARY), separate Groq key/quota ---
+        if r.status_code == 429 and model == MODEL_PRIMARY and API_KEY_SECONDARY:
+            print(f"{COLOR_YELLOW}[Quota exhausted on primary key, trying secondary {MODEL_PRIMARY} key]{COLOR_RESET}", flush=True)
+            url, headers = _endpoint_for(model, key_override=API_KEY_SECONDARY)
+            r = _post(payload, headers, stream, url=url)
+
+        # --- Tier 3: Cerebras (gpt-oss-120b) ---
+        # Reached if: no secondary key configured, OR the secondary key also
+        # hit 429. Either way, model is still MODEL_PRIMARY at this point.
         if r.status_code == 429 and model == MODEL_PRIMARY:
             _primary_exhausted_date = date.today()
             if CEREBRAS_API_KEY:
-                print(f"{COLOR_YELLOW}[Daily quota exhausted on {MODEL_PRIMARY}, switching to Cerebras ({MODEL_CEREBRAS_FALLBACK}) until midnight UTC]{COLOR_RESET}", flush=True)
+                print(f"{COLOR_YELLOW}[Daily quota exhausted on {MODEL_PRIMARY} (both keys), switching to Cerebras ({MODEL_CEREBRAS_FALLBACK}) until midnight UTC]{COLOR_RESET}", flush=True)
                 model = MODEL_CEREBRAS_FALLBACK
                 url, headers = _endpoint_for(model)
                 payload["model"] = model
                 _apply_gpt_oss_params(payload, model)
             else:
-                print(f"{COLOR_YELLOW}[Daily quota exhausted on {MODEL_PRIMARY}, switching to {MODEL_FALLBACK} until midnight UTC]{COLOR_RESET}", flush=True)
+                print(f"{COLOR_YELLOW}[Daily quota exhausted on {MODEL_PRIMARY} (both keys), switching to {MODEL_FALLBACK} until midnight UTC]{COLOR_RESET}", flush=True)
                 active_model = MODEL_FALLBACK
                 model = MODEL_FALLBACK
                 url, headers = _endpoint_for(model)
                 payload["model"] = model
+                # MODEL_FALLBACK is not a gpt-oss model -- see note below.
+                payload.pop("reasoning_effort", None)
+                payload.pop("reasoning_format", None)
+                payload.pop("include_reasoning", None)
             r = _post(payload, headers, stream, url=url)
 
+        # --- Tier 4: MODEL_FALLBACK (llama-3.1-8b-instant), absolute last resort ---
         if r.status_code == 429 and model == MODEL_CEREBRAS_FALLBACK:
             print(f"{COLOR_YELLOW}[Cerebras ({MODEL_CEREBRAS_FALLBACK}) also exhausted, switching to {MODEL_FALLBACK} until midnight UTC]{COLOR_RESET}", flush=True)
             _cerebras_exhausted_date = date.today()
@@ -207,6 +227,18 @@ def call_ai(messages: list, stream: bool = True):
             model = MODEL_FALLBACK
             url, headers = _endpoint_for(model)
             payload["model"] = model
+            # MODEL_FALLBACK (llama-3.1-8b-instant) is NOT a gpt-oss model and
+            # rejects reasoning_effort/reasoning_format/include_reasoning
+            # outright (400 invalid_request_error). These keys are still
+            # sitting in payload from the previous attempt where model was
+            # gpt-oss-120b -- strip them explicitly. _apply_gpt_oss_params
+            # alone isn't enough here because it only ever ADDS these keys
+            # for gpt-oss models; it has no corresponding removal step for
+            # when we fall away from one, which is exactly what caused this
+            # bug in the first place.
+            payload.pop("reasoning_effort", None)
+            payload.pop("reasoning_format", None)
+            payload.pop("include_reasoning", None)
             r = _post(payload, headers, stream, url=url)
 
         if r.status_code == 400 and _is_tool_use_failed(r.text):
