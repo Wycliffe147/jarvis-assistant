@@ -11,8 +11,20 @@ HOTSPOT_SUBNETS = [
 ]
 
 
-def _run_adb_shell(cmd: str, serial: str = "emulator-5554") -> str:
+def _run_adb_shell(cmd: str, serial: str = None) -> str:
     """Runs a shell command on the local device via ADB loopback."""
+    if serial is None:
+        serial = "127.0.0.1:5555"
+        try:
+            res = subprocess.run(["adb", "devices"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            for line in res.stdout.splitlines():
+                if "\tdevice" in line:
+                    name = line.split()[0]
+                    if "127.0.0.1" in name or "localhost" in name or "emulator" in name:
+                        serial = name
+                        break
+        except Exception:
+            pass
     res = subprocess.run(
         ["adb", "-s", serial, "shell", cmd],
         capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10
