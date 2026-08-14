@@ -2,7 +2,7 @@ import json
 import sys
 import re
 from collections import deque
-from jarvis.config import COLOR_GRAY, COLOR_RESET, COLOR_RED, COLOR_CYAN, COLOR_GREEN
+from jarvis.config import COLOR_GRAY, COLOR_RESET, COLOR_RED, COLOR_CYAN, COLOR_GREEN, COLOR_YELLOW
 from jarvis.tools import TOOLS, DATA_TOOLS
 from jarvis.ai import call_ai, build_messages
 from jarvis.history import load_persistent_history, save_persistent_history
@@ -304,8 +304,12 @@ def handle_response(response_gen, history: deque, messages: list, _depth: int = 
                             else:
                                 final_results.append(f"[{tool_name}] \u2192 {result}")
                             tool_outputs.append({"tool": tool_name, "result": result})
+                            # Print tool result for visibility (skip 'speak' to avoid clutter)
+                            if tool_name != "speak":
+                                print(f"{COLOR_YELLOW}  → {result}{COLOR_RESET}")
                         except Exception as e:
                             final_results.append(f"[{tool_name} Error: {e}]")
+                            print(f"{COLOR_RED}  → Error: {e}{COLOR_RESET}")
                     else:
                         final_results.append(f"[Unknown tool: {tool_name}]")
                 else:

@@ -55,6 +55,20 @@ def hotspot_open_settings() -> str:
     )
     return "Opened Hotspot & Tethering Settings."
 
+def _get_active_hotspot_subnets() -> list:
+    """Parses dumpsys tethering to dynamically find the active hotspot subnets."""
+    subnets = list(HOTSPOT_SUBNETS)
+    try:
+        out = _run_adb_shell("dumpsys tethering")
+        # Extract active subnets from LinkAddresses or Routes, e.g. 10.69.30.0/24 or 10.69.30.66/24
+        found = re.findall(r'(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}/\d+', out)
+        for subnet in found:
+            if subnet not in subnets:
+                subnets.append(subnet)
+    except Exception:
+        pass
+    return subnets
+
 def hotspot_status() -> str:
     """Checks if the hotspot is currently active and returns connected client IPs."""
     out = _run_adb_shell("dumpsys tethering")
@@ -71,6 +85,7 @@ def hotspot_status() -> str:
     # Try to read ARP table for connected clients
     arp = _run_adb_shell("cat /proc/net/arp")
     clients = []
+    active_subnets = _get_active_hotspot_subnets()
     for line in arp.splitlines():
         parts = line.split()
         if len(parts) >= 6:
@@ -78,7 +93,7 @@ def hotspot_status() -> str:
             hw = parts[3]
             device = parts[5]
             # Only show hotspot-range IPs
-            if any(ip.startswith(subnet) for subnet in HOTSPOT_SUBNETS):
+            if any(ip.startswith(subnet) for subnet in active_subnets):
                 if hw not in ("00:00:00:00:00:00", ""):
                     clients.append(f"  - {ip}  (MAC: {hw}, Interface: {device})")
 
@@ -101,12 +116,13 @@ def hotspot_scan_clients() -> str:
     arp = _run_adb_shell("cat /proc/net/arp")
     clients = []
     seen_ips = set()
+    active_subnets = _get_active_hotspot_subnets()
     for line in arp.splitlines():
         parts = line.split()
         if len(parts) >= 6:
             ip = parts[0]
             hw = parts[3]
-            if any(ip.startswith(s) for s in HOTSPOT_SUBNETS) and hw not in ("00:00:00:00:00:00", ""):
+            if any(ip.startswith(s) for s in active_subnets) and hw not in ("00:00:00:00:00:00", ""):
                 if ip not in seen_ips:
                     seen_ips.add(ip)
                     clients.append({"ip": ip, "mac": hw})
@@ -134,7 +150,7 @@ def hotspot_scan_clients() -> str:
                     pass
 
         threads = []
-        for subnet in HOTSPOT_SUBNETS[:4]:
+        for subnet in active_subnets[:4]:
             for i in range(1, 255):
                 ip = f"{subnet}.{i}"
                 t = threading.Thread(target=probe_host, args=(ip,), daemon=True)
