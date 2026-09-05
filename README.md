@@ -70,6 +70,68 @@ Both are the same physical device — neither is stray or removable. Any bare `a
 - (Optional) `tesseract` binary for offline OCR
 - `.env` file with `GROQ_API_KEY=your_key_here`
 
+## Setup Guide (New Phone)
+
+Follow these steps to set up Jarvis on a fresh Android phone:
+
+### 1. Install Termux & Termux:API
+1. Install **Termux** and **Termux:API** apps (preferably from [F-Droid](https://f-droid.org/) or GitHub Releases).
+2. Open Termux and grant storage access:
+   ```bash
+   termux-setup-storage
+   ```
+3. Grant necessary permissions to **Termux:API** in Android Settings (Microphone, Location, Camera, SMS, Contacts, Phone, and "Display over other apps").
+
+### 2. Install Required System Packages
+Update packages and install Python, Git, Termux-API tools, ADB, and optional dependencies:
+```bash
+pkg update && pkg upgrade -y
+pkg install python git termux-api android-tools tesseract ffmpeg -y
+```
+
+### 3. Clone Repository & Install Python Dependencies
+```bash
+git clone https://github.com/Wycliffe147/jarvis-assistant.git jarvis
+cd jarvis
+pip install -r requirements.txt
+```
+
+### 4. Create Environment File (`.env`)
+Create a `.env` file in the root of the `jarvis` directory:
+```bash
+cat << 'EOF' > .env
+GROQ_API_KEY=your_groq_api_key_here
+# Optional fallback keys
+CEREBRAS_API_KEY=your_cerebras_api_key_here
+EOF
+```
+Replace `your_groq_api_key_here` with your actual API key from [Groq Console](https://console.groq.com/).
+
+### 5. Enable Wireless Debugging & Local ADB
+1. Go to **Android Settings** → **Developer Options** → Enable **Wireless Debugging**.
+2. Pair ADB locally on Termux (if required by your Android version):
+   ```bash
+   adb pair 127.0.0.1:<PORT> <PAIRING_CODE>
+   ```
+3. Connect local ADB daemon:
+   ```bash
+   adb connect 127.0.0.1:5555
+   ```
+4. Verify ADB connection:
+   ```bash
+   adb devices
+   ```
+
+### 6. Verify and Run
+Run Jarvis in continuous voice assistant mode:
+```bash
+python -m jarvis.main voice
+```
+Or run a one-shot text command:
+```bash
+python -m jarvis.main "what is my battery level"
+```
+
 ## Usage
 
 ```bash
