@@ -2,6 +2,20 @@
 
 A voice-controlled AI assistant that runs entirely on an Android phone via [Termux](https://termux.dev/) — no PC, no cloud server, no companion app. Say "Jarvis," speak a command, and it can search the web, control device hardware, manage contacts/calls/SMS, take and analyze photos, play music, remote-control other Android devices over ADB, and more.
 
+## Table of Contents
+- [How It Works](#how-it-works)
+- [Model Setup](#model-setup)
+- [Tools Breakdown](#tools-breakdown)
+  - [ADB Dual Identities Note](#a-note-on-this-phone-having-two-adb-identities)
+- [Requirements](#requirements)
+- [Setup Guide (New Phone)](#setup-guide-new-phone)
+- [Usage](#usage)
+- [Project Structure](#project-structure)
+- [Multi-step Tool-Call Loop](#multi-step-tool-call-loop-handlerpy)
+- [Notes](#notes)
+
+---
+
 ## How it works
 
 ```
@@ -14,6 +28,8 @@ Wake word ("Jarvis") → Whisper STT → Local intent router → LLM (tool-calli
 - **Tool execution**: `handler.py` parses the model's tool calls and dispatches them to the corresponding Python function in `tools/`.
 - **Speech output**: results are spoken back via Piper (offline neural TTS) or Android's built-in TTS engine.
 
+---
+
 ## Model setup
 
 | Purpose | Model |
@@ -24,9 +40,19 @@ Wake word ("Jarvis") → Whisper STT → Local intent router → LLM (tool-calli
 | Vision (photo analysis) | `meta-llama/llama-4-scout-17b-16e-instruct` (Groq) |
 | Speech-to-text | `whisper-large-v3` (Groq) |
 
+<details>
+<summary><b>Click to expand model fallback & retry details</b></summary>
+
 `ai.py` tries the Groq primary first, then Cerebras (if `CEREBRAS_API_KEY` is set) once the primary hits its daily rate limit (HTTP 429), and only falls back to the small Groq model if *both* are exhausted on the same day. Each exhaustion flag clears automatically at midnight UTC. It also detects and retries around a known Groq-side bug (`tool_use_failed`) where the API attaches an implicit tool schema and rejects the model's own output.
 
-## Tools
+</details>
+
+---
+
+## Tools Breakdown
+
+<details>
+<summary><b>Click to expand list of 96 tools registered across 12 files</b></summary>
 
 96 tools registered in `tools/__init__.py`, organized by file:
 
@@ -49,7 +75,10 @@ Two distinct "control another device" systems exist side by side:
 - **ADB tools** control *any* Android phone with Wireless Debugging enabled — the target doesn't need Jarvis installed.
 - **Jarvis Link** only works between two phones that are *both* running this assistant.
 
-### A note on "this phone" having two ADB identities
+</details>
+
+<details>
+<summary><b>A note on "this phone" having two ADB identities</b></summary>
 
 Jarvis talks to its own host phone over ADB (for `ui_inspect.py`, `apps.py`'s `restart_app`/`get_crash_diagnostics`, etc.), and that phone shows up to `adb devices` as **two separate entries at once**:
 
@@ -59,6 +88,10 @@ emulator-5554   device   # Termux's local adbd reporting its own serial
 ```
 
 Both are the same physical device — neither is stray or removable. Any bare `adb` call with no explicit `-s <target>` has to guess between them, which gets worse the moment a real second device is also connected (`adb` then refuses to guess at all: `error: more than one device/emulator`). All ADB calls in this codebase should resolve an explicit target first (`_resolve_local_target()` / `_adb_target()`) rather than relying on bare `adb`.
+
+</details>
+
+---
 
 ## Requirements
 
@@ -70,7 +103,12 @@ Both are the same physical device — neither is stray or removable. Any bare `a
 - (Optional) `tesseract` binary for offline OCR
 - `.env` file with `GROQ_API_KEY=your_key_here`
 
+---
+
 ## Setup Guide (New Phone)
+
+<details>
+<summary><b>Click to expand full step-by-step setup guide for a new phone</b></summary>
 
 Follow these steps to set up Jarvis on a fresh Android phone:
 
@@ -152,6 +190,10 @@ Or run a one-shot text command:
 python -m jarvis.main "what is my battery level"
 ```
 
+</details>
+
+---
+
 ## Usage
 
 ```bash
@@ -165,7 +207,12 @@ python -m jarvis.main "what's my battery level"
 python -m jarvis.main
 ```
 
+---
+
 ## Project structure
+
+<details>
+<summary><b>Click to expand project directory tree</b></summary>
 
 ```
 jarvis/
@@ -179,6 +226,13 @@ jarvis/
 ├── cache/
 │   ├── music_cache.py    # Cached scan of audio files on device
 │   └── activity_cache.py # Cached app package → launch activity mapping
+├── shortcuts/           # Termux:Widget shortcuts & control scripts
+│   ├── launch-assistant.sh
+│   ├── kill-jarvis.sh
+│   ├── tail-jarvis-log.sh
+│   ├── piper-read.sh
+│   ├── run_piper.sh
+│   └── piper_watchdog.py
 └── tools/
     ├── device.py, media.py, comms.py, system.py, network.py
     ├── camera.py, apps.py, time_utils.py
@@ -188,13 +242,24 @@ jarvis/
     └── hotspot.py
 ```
 
+</details>
+
+---
+
 ## Multi-step tool-call loop (`handler.py`)
+
+<details>
+<summary><b>Click to expand multi-step tool-call loop mechanics</b></summary>
 
 When a tool's result needs the model to look at it and decide what to do next (e.g. read a UI dump, then tap something based on what it found), `handle_response` recurses: it sends the tool result back to the model as a follow-up turn, and keeps doing so until the model produces a final answer with no more "data" tool calls pending.
 
 This recursion is capped, **not unlimited** — `_depth` tracks how many follow-up passes have happened, and once it hits the limit, the loop stops recursing and returns whatever the model said last, even if the task isn't actually finished. Multi-step UI-automation chains (open app → tap search bar → type → submit → read results → tap a result) routinely need more passes than a single data lookup like "what's my battery," so UI-tool chains (anything using `ui_dump`, `ui_find_text`, `ui_tap_element`, or `input_my_screen`) get a higher depth ceiling than everything else.
 
 If a command that should be multi-step keeps ending early with a guessed/narrated outcome instead of a confirmed result, the depth ceiling for that tool category is the first thing to check.
+
+</details>
+
+---
 
 ## Notes
 
