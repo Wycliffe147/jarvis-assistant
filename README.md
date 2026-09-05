@@ -122,7 +122,27 @@ Replace `your_groq_api_key_here` with your actual API key from [Groq Console](ht
    adb devices
    ```
 
-### 6. Verify and Run
+### 6. Set Up Termux Widget Shortcuts
+Jarvis includes launcher & control scripts for [Termux:Widget](https://wiki.termux.com/wiki/Termux:Widget) in the `shortcuts/` directory.
+
+To copy the shortcut scripts into your Termux widget directory (`~/.shortcuts/`), run:
+```bash
+mkdir -p ~/.shortcuts
+cp ~/jarvis/shortcuts/* ~/.shortcuts/
+chmod +x ~/.shortcuts/*.sh
+```
+
+#### Shortcut Scripts Breakdown:
+| Script | Description |
+|---|---|
+| **`launch-assistant.sh`** | Acquires a Termux wake-lock (`termux-wake-lock`), starts the Piper TTS server in Ubuntu proot, launches Jarvis main process (`jarvis.main`) in background, logs to `~/boot_debug.log`, and triggers a toast notification. |
+| **`kill-jarvis.sh`** | Force-terminates Jarvis main process, Piper server, watchdog script, and log-tailing processes, releases wake-lock (`termux-wake-unlock`), and notifies via toast. |
+| **`tail-jarvis-log.sh`** | Opens a real-time tail of the log file (`tail -f ~/boot_debug.log`) for live activity monitoring and debugging. |
+| **`piper-read.sh`** | Displays a multi-line GUI text input dialog (`termux-dialog`), generates TTS speech audio via Piper inside Ubuntu proot, and plays it aloud using `termux-media-player`. |
+| **`run_piper.sh`** | Standalone launcher to start the Piper neural TTS server process inside Ubuntu proot. |
+| **`piper_watchdog.py`** | Background Python watchdog daemon that monitors the Piper TTS server inside Ubuntu proot and automatically restarts it if it crashes. |
+
+### 7. Verify and Run
 Run Jarvis in continuous voice assistant mode:
 ```bash
 python -m jarvis.main voice
