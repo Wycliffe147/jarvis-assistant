@@ -96,12 +96,36 @@ Both are the same physical device — neither is stray or removable. Any bare `a
 ## Requirements
 
 - Android phone, [Termux](https://termux.dev/) + [Termux:API](https://wiki.termux.com/wiki/Termux:API) app installed
-- Python 3 with: `requests`, `python-dotenv`, `sounddevice`, `numpy`, `beautifulsoup4`
+- Python 3 + libraries (`requests`, `python-dotenv`, `sounddevice`, `numpy`, `beautifulsoup4`)
 - A [Groq](https://console.groq.com/) API key
+- `adb` binary + Wireless Debugging enabled on host phone
 - (Optional) [Piper TTS](https://github.com/rhasspy/piper) for offline neural speech output
-- `adb` binary + Wireless Debugging enabled on the host phone itself — required for `apps.py`'s `restart_app`/`get_crash_diagnostics` and all of `ui_inspect.py`'s on-screen automation, in addition to controlling other devices
 - (Optional) `tesseract` binary for offline OCR
 - `.env` file with `GROQ_API_KEY=your_key_here`
+
+<details>
+<summary><b>Click to expand detailed breakdown of dependencies & their purpose</b></summary>
+
+### System Package Dependencies
+| Package | Purpose |
+|---|---|
+| **`python`** | Python 3 runtime environment required to execute the Jarvis assistant core modules. |
+| **`git`** | Version control software used to clone, update, and manage the Jarvis codebase. |
+| **`termux-api`** | CLI utilities interfacing Termux with Android system APIs (Microphone, Camera, SMS, Calls, Battery, WiFi, Notifications, Sensors). |
+| **`android-tools`** | Provides the `adb` (Android Debug Bridge) client to perform on-screen UI automation (`ui_inspect.py`) and remote device control. |
+| **`tesseract`** | *(Optional)* Offline Optical Character Recognition (OCR) engine for extracting text from images and camera snapshots. |
+| **`ffmpeg`** | Audio and video processing tool for encoding, decoding, and handling speech audio streams. |
+
+### Python Library Dependencies (`requirements.txt`)
+| Library | Purpose |
+|---|---|
+| **`requests`** | Handles HTTP requests for Groq & Cerebras LLM API calls, Web Search queries, and web page content fetching. |
+| **`python-dotenv`** | Reads and loads environment variables (e.g. `GROQ_API_KEY`, `CEREBRAS_API_KEY`) from local `.env` files. |
+| **`sounddevice`** | Captures real-time audio input from the phone's microphone for wake word detection and speech recognition. |
+| **`numpy`** | Performs high-performance numerical array operations on raw PCM audio buffers before STT processing. |
+| **`beautifulsoup4`** | Parses HTML/XML structure to extract clean, readable text content from websites for LLM analysis. |
+
+</details>
 
 ---
 
@@ -121,10 +145,10 @@ Follow these steps to set up Jarvis on a fresh Android phone:
 3. Grant necessary permissions to **Termux:API** in Android Settings (Microphone, Location, Camera, SMS, Contacts, Phone, and "Display over other apps").
 
 ### 2. Install Required System Packages
-Update packages and install Python, Git, Termux-API tools, ADB, and optional dependencies:
+Update packages and install Python, pre-compiled NumPy, Git, Termux-API tools, ADB, and optional dependencies:
 ```bash
 pkg update && pkg upgrade -y
-pkg install python git termux-api android-tools tesseract ffmpeg -y
+pkg install python python-numpy git termux-api android-tools tesseract ffmpeg -y
 ```
 
 ### 3. Clone Repository & Install Python Dependencies
@@ -133,6 +157,8 @@ git clone https://github.com/Wycliffe147/jarvis-assistant.git jarvis
 cd jarvis
 pip install -r requirements.txt
 ```
+> [!TIP]
+> **Performance Note for Budget Phones**: Installing `python-numpy` via `pkg install` in Step 2 installs a pre-compiled binary in ~15 seconds. If skipped, `pip` attempts to compile NumPy from C source code on your phone, taking 20+ minutes on budget phone CPUs.
 
 ### 4. Create Environment File (`.env`)
 Create a `.env` file in the root of the `jarvis` directory:
@@ -189,6 +215,23 @@ Or run a one-shot text command:
 ```bash
 python -m jarvis.main "what is my battery level"
 ```
+
+### 8. Setup Command Reference & Purpose
+Below is a reference guide explaining the exact purpose of each command used in the setup process:
+
+| Command | Purpose |
+|---|---|
+| **`termux-setup-storage`** | Grants Termux permission to access shared device storage (`/sdcard/`). |
+| **`pkg update && pkg upgrade -y`** | Refreshes Termux package indices and upgrades all installed packages to their latest versions. |
+| **`pkg install python python-numpy git termux-api android-tools tesseract ffmpeg -y`** | Installs system binaries and pre-compiled NumPy required for Python runtime, fast math array handling, repository cloning, Android API bridge, local ADB automation, OCR, and audio stream handling. |
+| **`git clone ...`** | Downloads the latest Jarvis source code repository from GitHub to `~/jarvis`. |
+| **`pip install -r requirements.txt`** | Installs all required Python third-party packages (`requests`, `python-dotenv`, `sounddevice`, `numpy`, `beautifulsoup4`). |
+| **`cat << 'EOF' > .env ...`** | Generates the local `.env` configuration file to store secret API credentials (`GROQ_API_KEY`, `CEREBRAS_API_KEY`). |
+| **`adb pair 127.0.0.1:<PORT> <CODE>`** | Authenticates Termux ADB with Android's Wireless Debugging service. |
+| **`adb connect 127.0.0.1:5555`** | Connects Termux ADB to the local loopback interface for on-screen UI inspection and app control. |
+| **`cp ~/jarvis/shortcuts/* ~/.shortcuts/`** | Deploys Termux:Widget launcher & management scripts to the widget shortcuts folder. |
+| **`chmod +x ~/.shortcuts/*.sh`** | Grants executable permissions to all shortcut shell scripts. |
+| **`python -m jarvis.main voice`** | Starts Jarvis in continuous voice assistant mode listening for the wake word "Jarvis". |
 
 </details>
 
