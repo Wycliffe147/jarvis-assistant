@@ -9,6 +9,7 @@ A voice-controlled AI assistant that runs entirely on an Android phone via [Term
   - [ADB Dual Identities Note](#a-note-on-this-phone-having-two-adb-identities)
 - [Requirements](#requirements)
 - [Setup Guide (New Phone)](#setup-guide-new-phone)
+- [Permissions & Troubleshooting](#permissions--troubleshooting)
 - [Usage](#usage)
 - [Updating](#updating)
 - [Project Structure](#project-structure)
@@ -143,7 +144,13 @@ Follow these steps to set up Jarvis on a fresh Android phone:
    ```bash
    termux-setup-storage
    ```
-3. Grant necessary permissions to **Termux:API** in Android Settings (Microphone, Location, Camera, SMS, Contacts, Phone, and "Display over other apps").
+3. **Grant Android Permissions for Termux & Termux:API**:
+   - Go to **Android Settings** → **Apps** → **Termux** → **Permissions** → **Microphone** → Select **"Allow while using the app"**.
+   - Go to **Android Settings** → **Apps** → **Termux:API** → **Permissions** → Grant **Microphone**, **Camera**, **Location**, **SMS**, **Contacts**, **Phone**, and **"Display over other apps"**.
+
+> [!CAUTION]
+> **Microphone Permission Error (`PaErrorCode -9999`)**:
+> If you see the error `Wake word error: Error opening InputStream: Unanticipated host error [PaErrorCode -9999]: 'Initializing inputstream failed' [android OpenSLES error -9999]`, Android has blocked **Termux** from recording audio. Go to **Android Settings → Apps → Termux → Permissions → Microphone** and set it to **"Allow while using the app"**.
 
 ### 2. Install Required System Packages
 Update packages and install Python, Git, Termux-API tools, ADB, proot-distro, and audio dependencies:
@@ -266,6 +273,56 @@ Below is a reference guide explaining the exact purpose of each command used in 
 | **`cp ~/jarvis/shortcuts/* ~/.shortcuts/`** | Deploys Termux:Widget launcher & management scripts to the widget shortcuts folder. |
 | **`chmod +x ~/.shortcuts/*.sh`** | Grants executable permissions to all shortcut shell scripts. |
 | **`python -m jarvis.main voice`** | Starts Jarvis in continuous voice assistant mode listening for the wake word "Jarvis". |
+
+</details>
+
+---
+
+## Permissions & Troubleshooting
+
+<details>
+<summary><b>Click to expand Android permissions & common error fixes</b></summary>
+
+### Required Android Permissions Table
+
+| App | Permission | Why It Is Required |
+|---|---|---|
+| **Termux** | **Microphone** | Required by `sounddevice` & `PortAudio` (`OpenSLES`) for wake word listening & voice command recording. |
+| **Termux** | **Storage** | Granted via `termux-setup-storage` to save audio recordings (`/sdcard/voice_input.wav`) and vision photos (`/sdcard/jarvis_vision.jpg`). |
+| **Termux** | **Disable Battery Optimization** | Set to **"Unrestricted"** so Android Doze mode does not kill the wake word loop or background shortcuts when the phone screen is off. |
+| **Termux:API** | **Microphone, Camera, SMS, Contacts, Location, Phone** | Interfaced by `termux-api` tools for taking photos, sending/reading SMS, making calls, retrieving contacts, and getting GPS location. |
+| **Termux:API** | **Display over other apps** | Required for displaying GUI dialogs (`termux-dialog`), share sheets, and toast notifications. |
+
+---
+
+### Common Errors & Solutions
+
+#### 1. Microphone Access Failure (`PaErrorCode -9999`)
+- **Error**: `Wake word error: Error opening InputStream: Unanticipated host error [PaErrorCode -9999]: 'Initializing inputstream failed' [android OpenSLES error -9999]`
+- **Cause**: Android OS blocked **Termux** from opening the audio recording input stream via OpenSLES.
+- **Fix**: Open **Android Settings** → **Apps** → **Termux** → **Permissions** → **Microphone** → Select **"Allow while using the app"**. Restart Jarvis.
+
+#### 2. Termux Background Process Killed / Sleep Disconnection
+- **Symptom**: Jarvis stops responding or stops listening when the phone screen turns off.
+- **Fix 1**: Acquire Termux wake-lock inside Termux before running:
+  ```bash
+  termux-wake-lock
+  ```
+- **Fix 2**: Go to **Android Settings** → **Apps** → **Termux** → **Battery** → Select **"Unrestricted"** (or **"Don't optimize"**).
+
+#### 3. Self-ADB Unavailable (`connection refused` or `device offline`)
+- **Symptom**: `[Self-ADB unavailable — wireless debugging is off]` on startup.
+- **Fix**:
+  1. Open **Android Settings** → **Developer Options** → Enable **Wireless Debugging**.
+  2. In Termux, run:
+     ```bash
+     adb connect 127.0.0.1:5555
+     ```
+  3. Verify with `adb devices`.
+
+#### 4. Piper Neural Voice Server Not Running / Silent Fallback
+- **Symptom**: Spoken responses sound robotic (Android system TTS) instead of natural neural speech.
+- **Fix**: Ensure Ubuntu proot is installed (`proot-distro install ubuntu`) and `~/piper/piper` binary plus `.onnx` voice model exist in `~/piper/`.
 
 </details>
 
