@@ -10,6 +10,7 @@ A voice-controlled AI assistant that runs entirely on an Android phone via [Term
 - [Requirements](#requirements)
 - [Setup Guide (New Phone)](#setup-guide-new-phone)
 - [Usage](#usage)
+- [Updating](#updating)
 - [Project Structure](#project-structure)
 - [Multi-step Tool-Call Loop](#multi-step-tool-call-loop-handlerpy)
 - [Notes](#notes)
@@ -263,6 +264,29 @@ python -m jarvis.main "what's my battery level"
 # No arguments defaults to voice mode
 python -m jarvis.main
 ```
+
+---
+
+## Updating
+
+When changes are pushed to this repository, pull the latest version to your phone with:
+
+```bash
+cd ~/jarvis
+git pull origin master
+```
+
+If `requirements.txt` was changed (e.g. a new dependency added), also re-run:
+```bash
+pip install -r requirements.txt
+```
+
+> [!TIP]
+> You can check if `requirements.txt` changed in the latest pull with:
+> ```bash
+> git diff HEAD@{1} HEAD -- requirements.txt
+> ```
+> If the output is empty, no dependency changes were made and you can skip `pip install`.
 
 ---
 
