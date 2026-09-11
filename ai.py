@@ -149,7 +149,7 @@ def _non_streaming_retry(payload, headers, url=URL_CHAT):
             text = r2.json()["choices"][0]["message"].get("content", "").strip()
             if text:
                 return text, True
-        if r2.status_code == 429:
+        if r2.status_code in (429, 413):
             return "429_RATE_LIMIT", False
         if _is_tool_use_failed(r2.text):
             # Give it one more shot — this Groq-side bug is often transient.
@@ -180,13 +180,6 @@ def call_ai(messages: list, stream: bool = True):
             role = m.get("role", "?")
             content = m.get("content", "")
             preview = content if isinstance(content, str) else str(content)
-            # The system prompt is large and identical on every single request
-            # (it never changes mid-conversation), so printing it in full each
-            # time just buries the parts that actually vary. Truncate ONLY
-            # this one role; every other message (user/assistant/tool-result
-            # feedback) is printed completely untruncated, since seeing the
-            # full real ui_dump/ui_tap_element content -- not a 500-char
-            # preview of it -- is the whole point of this debug log.
             if role == "system" and len(preview) > 300:
                 preview = preview[:300] + f"...[system prompt truncated, {len(preview)} chars total -- unchanged each request]"
             print(f"[REQUEST]   [{i}] role={role}: {preview}", file=_sys.stderr, flush=True)
@@ -195,51 +188,41 @@ def call_ai(messages: list, stream: bool = True):
         r = _post(payload, headers, stream, url=url)
 
         # --- Tier 2: same model (MODEL_PRIMARY), separate Groq key/quota ---
-        if r.status_code == 429 and model == MODEL_PRIMARY and API_KEY_SECONDARY:
+        if r.status_code in (429, 413) and model == MODEL_PRIMARY and API_KEY_SECONDARY:
             print(f"{COLOR_YELLOW}[Quota exhausted on primary key, trying secondary {MODEL_PRIMARY} key]{COLOR_RESET}", flush=True)
             url, headers = _endpoint_for(model, key_override=API_KEY_SECONDARY)
             r = _post(payload, headers, stream, url=url)
 
         # --- Tier 3: Cerebras (gpt-oss-120b) ---
         # Reached if: no secondary key configured, OR the secondary key also
-        # hit 429. Either way, model is still MODEL_PRIMARY at this point.
-        if r.status_code == 429 and model == MODEL_PRIMARY:
+        # hit 429/413. Either way, model is still MODEL_PRIMARY at this point.
+        if r.status_code in (429, 413) and model == MODEL_PRIMARY:
             _primary_exhausted_date = date.today()
             if CEREBRAS_API_KEY:
-                print(f"{COLOR_YELLOW}[Daily quota exhausted on {MODEL_PRIMARY} (both keys), switching to Cerebras ({MODEL_CEREBRAS_FALLBACK}) until midnight UTC]{COLOR_RESET}", flush=True)
+                print(f"{COLOR_YELLOW}[Daily quota/ITPM limit hit on {MODEL_PRIMARY}, switching to Cerebras ({MODEL_CEREBRAS_FALLBACK}) until midnight UTC]{COLOR_RESET}", flush=True)
                 model = MODEL_CEREBRAS_FALLBACK
                 url, headers = _endpoint_for(model)
                 payload["model"] = model
                 _apply_gpt_oss_params(payload, model)
             else:
-                print(f"{COLOR_YELLOW}[Daily quota exhausted on {MODEL_PRIMARY} (both keys), switching to {MODEL_FALLBACK} until midnight UTC]{COLOR_RESET}", flush=True)
+                print(f"{COLOR_YELLOW}[Daily quota/ITPM limit hit on {MODEL_PRIMARY}, switching to {MODEL_FALLBACK} until midnight UTC]{COLOR_RESET}", flush=True)
                 active_model = MODEL_FALLBACK
                 model = MODEL_FALLBACK
                 url, headers = _endpoint_for(model)
                 payload["model"] = model
-                # MODEL_FALLBACK is not a gpt-oss model -- see note below.
                 payload.pop("reasoning_effort", None)
                 payload.pop("reasoning_format", None)
                 payload.pop("include_reasoning", None)
             r = _post(payload, headers, stream, url=url)
 
-        # --- Tier 4: MODEL_FALLBACK (llama-3.1-8b-instant), absolute last resort ---
-        if r.status_code == 429 and model == MODEL_CEREBRAS_FALLBACK:
+        # --- Tier 4: MODEL_FALLBACK, absolute last resort ---
+        if r.status_code in (429, 413) and model == MODEL_CEREBRAS_FALLBACK:
             print(f"{COLOR_YELLOW}[Cerebras ({MODEL_CEREBRAS_FALLBACK}) also exhausted, switching to {MODEL_FALLBACK} until midnight UTC]{COLOR_RESET}", flush=True)
             _cerebras_exhausted_date = date.today()
             active_model = MODEL_FALLBACK
             model = MODEL_FALLBACK
             url, headers = _endpoint_for(model)
             payload["model"] = model
-            # MODEL_FALLBACK (llama-3.1-8b-instant) is NOT a gpt-oss model and
-            # rejects reasoning_effort/reasoning_format/include_reasoning
-            # outright (400 invalid_request_error). These keys are still
-            # sitting in payload from the previous attempt where model was
-            # gpt-oss-120b -- strip them explicitly. _apply_gpt_oss_params
-            # alone isn't enough here because it only ever ADDS these keys
-            # for gpt-oss models; it has no corresponding removal step for
-            # when we fall away from one, which is exactly what caused this
-            # bug in the first place.
             payload.pop("reasoning_effort", None)
             payload.pop("reasoning_format", None)
             payload.pop("include_reasoning", None)
