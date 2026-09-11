@@ -27,6 +27,9 @@ def _get_model() -> str:
     if _cerebras_exhausted_date is not None and _cerebras_exhausted_date != today:
         _cerebras_exhausted_date = None
 
+    if not API_KEY and CEREBRAS_API_KEY:
+        return MODEL_CEREBRAS_FALLBACK
+
     if _primary_exhausted_date == today and _cerebras_exhausted_date == today:
         return MODEL_FALLBACK
     if _primary_exhausted_date == today and CEREBRAS_API_KEY:
@@ -273,11 +276,15 @@ def call_ai(messages: list, stream: bool = True):
 
 
 def transcribe_audio(filepath: str) -> str | None:
+    whisper_key = API_KEY or API_KEY_SECONDARY
+    if not whisper_key:
+        print(f"{COLOR_RED}Whisper STT Error: GROQ_API_KEY is required for voice transcription.{COLOR_RESET}")
+        return None
     try:
         with open(filepath, "rb") as f:
             r = requests.post(
                 URL_WHISPER,
-                headers={"Authorization": f"Bearer {API_KEY}"},
+                headers={"Authorization": f"Bearer {whisper_key}"},
                 files={"file": (os.path.basename(filepath), f, "audio/wav")},
                 data={
                     "model": "whisper-large-v3",

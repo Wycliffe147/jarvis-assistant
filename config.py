@@ -8,8 +8,8 @@ API_KEY = os.getenv("GROQ_API_KEY")
 API_KEY_SECONDARY = os.getenv("GROQ_API_KEY_SECONDARY")  # optional 2nd key, same model as primary, separate quota
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")  # optional third-tier fallback
 
-if not API_KEY:
-    print("Error: GROQ_API_KEY not found in .env file.")
+if not API_KEY and not CEREBRAS_API_KEY:
+    print("Error: No valid API key found in .env file. Please add GROQ_API_KEY or CEREBRAS_API_KEY.")
     exit(1)
 
 # --- Voice recording config ---
