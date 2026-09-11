@@ -252,10 +252,11 @@ chmod +x ~/.shortcuts/*.sh
 | **`piper_watchdog.py`** | Background Python watchdog daemon that monitors the Piper TTS server inside Ubuntu proot and automatically restarts it if it crashes. |
 
 ### 8. Set Up `jarvis` Shell Alias (Optional but Recommended)
-To run Jarvis easily from any directory in Termux without typing `python -m jarvis.main` every time, add a shell alias to your `~/.bashrc`:
+To run Jarvis easily from any directory in Termux, set `PYTHONPATH=$HOME` in your shell alias so Python can locate the `jarvis` package regardless of your current directory:
 
 ```bash
-echo "alias jarvis='cd ~/jarvis && python -m jarvis.main'" >> ~/.bashrc
+sed -i '/alias jarvis=/d' ~/.bashrc
+echo "alias jarvis='PYTHONPATH=\$HOME python -m jarvis.main'" >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -270,6 +271,7 @@ Or run a one-shot text command:
 ```bash
 jarvis "what is my battery level"
 ```
+*(Or without alias: `PYTHONPATH=$HOME python -m jarvis.main voice`)*
 
 ### 10. Setup Command Reference & Purpose
 Below is a reference guide explaining the exact purpose of each command used in the setup process:
@@ -361,8 +363,8 @@ jarvis
 
 Direct module execution (without alias):
 ```bash
-python -m jarvis.main voice
-python -m jarvis.main "what's my battery level"
+PYTHONPATH=$HOME python -m jarvis.main voice
+PYTHONPATH=$HOME python -m jarvis.main "what's my battery level"
 ```
 
 ---
