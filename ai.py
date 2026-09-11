@@ -149,7 +149,8 @@ def _non_streaming_retry(payload, headers, url=URL_CHAT):
             text = r2.json()["choices"][0]["message"].get("content", "").strip()
             if text:
                 return text, True
-            return "", True
+        if r2.status_code == 429:
+            return "429_RATE_LIMIT", False
         if _is_tool_use_failed(r2.text):
             # Give it one more shot — this Groq-side bug is often transient.
             try:
@@ -266,6 +267,17 @@ def call_ai(messages: list, stream: bool = True):
             if not yielded_anything:
                 print(f"{COLOR_RED}[Warning: streaming returned empty response from {model}. Retrying non-streaming...]{COLOR_RESET}")
                 text, ok = _non_streaming_retry(payload, headers, url=url)
+                if text == "429_RATE_LIMIT":
+                    if CEREBRAS_API_KEY:
+                        print(f"{COLOR_YELLOW}[Rate limit hit on {model}, switching to Cerebras ({MODEL_CEREBRAS_FALLBACK})]{COLOR_RESET}")
+                        c_url, c_headers = _endpoint_for(MODEL_CEREBRAS_FALLBACK)
+                        c_payload = dict(payload)
+                        c_payload["model"] = MODEL_CEREBRAS_FALLBACK
+                        _apply_gpt_oss_params(c_payload, MODEL_CEREBRAS_FALLBACK)
+                        text, ok = _non_streaming_retry(c_payload, c_headers, url=c_url)
+                    else:
+                        text = "Rate limit reached for primary model. Please try again in a few moments or set CEREBRAS_API_KEY."
+                        ok = False
                 yield text, ok
         else:
             text = r.json()["choices"][0]["message"]["content"].strip()

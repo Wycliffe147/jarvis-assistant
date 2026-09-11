@@ -28,7 +28,7 @@ URL_CHAT     = "https://api.groq.com/openai/v1/chat/completions"
 URL_WHISPER  = "https://api.groq.com/openai/v1/audio/transcriptions"
 URL_CEREBRAS = "https://api.cerebras.ai/v1/chat/completions"
 
-MODEL_PRIMARY  = "openai/gpt-oss-120b"
+MODEL_PRIMARY  = "qwen/qwen3.6-27b"
 MODEL_FALLBACK = "openai/gpt-oss-20b"
 MODEL_VISION   = "meta-llama/llama-4-scout-17b-16e-instruct"
 # Third tier: a genuinely separate provider/quota pool, used once BOTH Groq
