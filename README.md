@@ -155,7 +155,7 @@ pkg install python python-numpy git termux-api android-tools tesseract ffmpeg -y
 ```bash
 git clone https://github.com/Wycliffe147/jarvis-assistant.git jarvis
 cd jarvis
-pip install -r requirements.txt
+pip install --prefer-binary -r requirements.txt
 ```
 > [!TIP]
 > **Performance Note for Budget Phones**: Installing `python-numpy` via `pkg install` in Step 2 installs a pre-compiled binary in ~15 seconds. If skipped, `pip` attempts to compile NumPy from C source code on your phone, taking 20+ minutes on budget phone CPUs.
@@ -225,7 +225,7 @@ Below is a reference guide explaining the exact purpose of each command used in 
 | **`pkg update && pkg upgrade -y`** | Refreshes Termux package indices and upgrades all installed packages to their latest versions. |
 | **`pkg install python python-numpy git termux-api android-tools tesseract ffmpeg -y`** | Installs system binaries and pre-compiled NumPy required for Python runtime, fast math array handling, repository cloning, Android API bridge, local ADB automation, OCR, and audio stream handling. |
 | **`git clone ...`** | Downloads the latest Jarvis source code repository from GitHub to `~/jarvis`. |
-| **`pip install -r requirements.txt`** | Installs all required Python third-party packages (`requests`, `python-dotenv`, `sounddevice`, `numpy`, `beautifulsoup4`). |
+| **`pip install --prefer-binary -r requirements.txt`** | Installs all required Python packages using pre-compiled binary wheels. The `--prefer-binary` flag prevents pip from compiling packages from source, which can take 20+ minutes on budget phone CPUs. |
 | **`cat << 'EOF' > .env ...`** | Generates the local `.env` configuration file to store secret API credentials (`GROQ_API_KEY`, `CEREBRAS_API_KEY`). |
 | **`adb pair 127.0.0.1:<PORT> <CODE>`** | Authenticates Termux ADB with Android's Wireless Debugging service. |
 | **`adb connect 127.0.0.1:5555`** | Connects Termux ADB to the local loopback interface for on-screen UI inspection and app control. |
