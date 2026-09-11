@@ -94,27 +94,22 @@ def _apply_gpt_oss_params(payload: dict, model: str):
     """Sets the right gpt-oss-specific params for whichever provider is
     serving the model. Cerebras's API supports the standard reasoning_effort
     parameter but rejects include_reasoning entirely (400: unsupported) --
-    that param is specific to other gpt-oss hosts (e.g. Groq's), not part
-    of Cerebras's API surface. Cerebras's equivalent for keeping reasoning
-    text out of `content` is `reasoning_format` (a DIFFERENT param name,
-    same purpose) -- but the value matters: "none" is a NO-OP for gpt-oss
-    (it just means "use the model's default format", which for gpt-oss is
-    "raw" -- reasoning concatenated directly into content with NO
-    separator, since gpt-oss has no <think> tokens to wrap it in). That
-    default is what caused raw chain-of-thought ("We need to first
-    speak...", "Let's output tool calls...") to leak into stdout and get
-    fed back into the tool-call parser. reasoning_format="parsed" is the
-    value that actually routes reasoning into its own `reasoning` delta
-    field, separate from `content`. _stream_response already ignores that
-    field by design (it only reads `content`/`reasoning_content` as a
-    last-resort fallback, per its own docstring)."""
+    that param is specific to other gpt-oss hosts (e.g. Groq's).
+    Cerebras uses reasoning_format="parsed" instead.
+    This function ensures params are cleanly set and popped when switching
+    between providers."""
     if "gpt-oss" not in model:
+        payload.pop("reasoning_effort", None)
+        payload.pop("reasoning_format", None)
+        payload.pop("include_reasoning", None)
         return
     payload["reasoning_effort"] = "low"
     if model != MODEL_CEREBRAS_FALLBACK:
         payload["include_reasoning"] = False
+        payload.pop("reasoning_format", None)
     else:
         payload["reasoning_format"] = "parsed"
+        payload.pop("include_reasoning", None)
 
 
 def _endpoint_for(model: str, key_override: str = None) -> tuple[str, dict]:
