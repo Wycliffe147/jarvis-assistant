@@ -89,6 +89,21 @@ def handle_force_refresh(tool_name: str, args: dict, command_str: str, history: 
     save_persistent_history(history)
 
 
+def speak_local_result(tool_name: str, confirmation: str, result: str):
+    from jarvis.tools.media import speak
+    if tool_name == "get_battery_status":
+        try:
+            data = json.loads(result)
+            percentage = data.get("percentage") or data.get("level")
+            status = str(data.get("status", "")).lower()
+            if percentage is not None:
+                speak(f"Battery is at {percentage} percent and {status}.")
+                return
+        except Exception:
+            pass
+    speak(confirmation)
+
+
 def classify_local_intent(text: str):
     """
     Lightweight regex-based router to intercept hardware commands locally.
@@ -445,6 +460,7 @@ def execute_text_command(command_str: str):
             result = TOOLS[tool_name](**args)
             display = f"{confirmation}\n{result}"
             print(f"\n{COLOR_CYAN}AI Summary (Local):{COLOR_RESET} {display}\n")
+            speak_local_result(tool_name, confirmation, result)
             history.append({"role": "user", "content": command_str})
             history.append({"role": "assistant", "content": display})
             save_persistent_history(history)

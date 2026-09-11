@@ -149,16 +149,7 @@ def main():
     if adb_self_connect():
         print(f"{COLOR_GRAY}[Self-ADB connected on 127.0.0.1:5555]{COLOR_RESET}")
     else:
-        print(f"{COLOR_YELLOW}[Self-ADB unavailable — wireless debugging is off]{COLOR_RESET}")
-        try:
-            subprocess.run(
-                ["am", "start", "-n",
-                 "com.android.settings/.Settings$WirelessDebuggingActivity"],
-                stdin=subprocess.DEVNULL, capture_output=True
-            )
-        except Exception:
-            pass
-        speak("Wireless debugging is off. I've opened the settings — please enable it so I can control the screen.")
+        print(f"{COLOR_GRAY}[Self-ADB unavailable — wireless debugging is off]{COLOR_RESET}")
 
     if len(sys.argv) > 1:
         command_str = " ".join(sys.argv[1:])
