@@ -165,9 +165,18 @@ proot-distro login ubuntu -- apt update
 proot-distro login ubuntu -- apt install python3 python3-pip -y
 ```
 
-Place the Linux `piper` executable and `.onnx` voice model in `~/piper/`:
-- Executable: `~/piper/piper`
-- Voice model: `~/piper/en_GB-southern_english_female-low.onnx` (plus `.onnx.json`)
+*(Optional)* Download the arm64 Piper binary and ONNX voice model into `~/piper/`:
+```bash
+mkdir -p ~/piper && cd ~/piper
+
+# Download & extract Piper binary (Linux arm64)
+wget https://github.com/rhasspy/piper/releases/download/2023.8.15-2/piper_linux_aarch64.tar.gz
+tar -xvf piper_linux_aarch64.tar.gz
+
+# Download voice model and config
+wget https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/southern_english_female/low/en_GB-southern_english_female-low.onnx
+wget https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/southern_english_female/low/en_GB-southern_english_female-low.onnx.json
+```
 
 > [!NOTE]
 > **Piper TTS is optional.** If `~/piper/piper` is missing or Ubuntu is not installed, Jarvis automatically falls back to Android's built-in system TTS engine (`termux-tts-speak`).
