@@ -145,16 +145,26 @@ Follow these steps to set up Jarvis on a fresh Android phone:
 3. Grant necessary permissions to **Termux:API** in Android Settings (Microphone, Location, Camera, SMS, Contacts, Phone, and "Display over other apps").
 
 ### 2. Install Required System Packages
-Update packages and install Python, Git, Termux-API tools, ADB, and optional dependencies:
+Update packages and install Python, Git, Termux-API tools, ADB, proot-distro, and audio dependencies:
 ```bash
 pkg update && pkg upgrade -y
-pkg install python python-numpy portaudio git termux-api android-tools tesseract ffmpeg -y
+pkg install python python-numpy portaudio git termux-api android-tools tesseract ffmpeg proot-distro -y
 ```
 
 > [!IMPORTANT]
 > **Install `python-numpy` and `portaudio` via `pkg` before running pip.** PyPI does not host pre-compiled wheels for Android — if you skip this step, pip will compile `numpy` and `sounddevice` entirely from C/C++ source on your phone's processor, which takes **30–45+ minutes** on budget phones and can cause overheating or OOM crashes.
 
-### 3. Clone Repository & Install Python Dependencies
+### 3. Set Up Ubuntu via proot-distro
+Jarvis runs the [Piper TTS](https://github.com/rhasspy/piper) speech engine inside a lightweight Ubuntu environment. Install and bootstrap it:
+```bash
+proot-distro install ubuntu
+proot-distro login ubuntu -- apt update
+proot-distro login ubuntu -- apt install python3 python3-pip -y
+```
+> [!NOTE]
+> This downloads a minimal Ubuntu rootfs (~100 MB). It only needs to be done once. After this step, `proot-distro run ubuntu -- <cmd>` will work and Jarvis can use Piper TTS for speech output.
+
+### 4. Clone Repository & Install Python Dependencies
 ```bash
 git clone https://github.com/Wycliffe147/jarvis-assistant.git jarvis
 cd jarvis
@@ -164,7 +174,7 @@ pip install -r requirements.txt
 > [!TIP]
 > After running Step 2, `pip` will print `Requirement already satisfied: numpy` and skip it instantly. `sounddevice` will also build in seconds because `portaudio` headers are already available.
 
-### 4. Create Environment File (`.env`)
+### 5. Create Environment File (`.env`)
 Create a `.env` file in the root of the `jarvis` directory:
 ```bash
 cat << 'EOF' > .env
@@ -175,7 +185,7 @@ EOF
 ```
 Replace `your_groq_api_key_here` with your actual API key from [Groq Console](https://console.groq.com/).
 
-### 5. Enable Wireless Debugging & Local ADB
+### 6. Enable Wireless Debugging & Local ADB
 1. Go to **Android Settings** → **Developer Options** → Enable **Wireless Debugging**.
 2. Pair ADB locally on Termux (if required by your Android version):
    ```bash
@@ -190,7 +200,7 @@ Replace `your_groq_api_key_here` with your actual API key from [Groq Console](ht
    adb devices
    ```
 
-### 6. Set Up Termux Widget Shortcuts
+### 7. Set Up Termux Widget Shortcuts
 Jarvis includes launcher & control scripts for [Termux:Widget](https://wiki.termux.com/wiki/Termux:Widget) in the `shortcuts/` directory.
 
 To copy the shortcut scripts into your Termux widget directory (`~/.shortcuts/`), run:
@@ -210,7 +220,7 @@ chmod +x ~/.shortcuts/*.sh
 | **`run_piper.sh`** | Standalone launcher to start the Piper neural TTS server process inside Ubuntu proot. |
 | **`piper_watchdog.py`** | Background Python watchdog daemon that monitors the Piper TTS server inside Ubuntu proot and automatically restarts it if it crashes. |
 
-### 7. Verify and Run
+### 8. Verify and Run
 Run Jarvis in continuous voice assistant mode:
 ```bash
 python -m jarvis.main voice
@@ -220,7 +230,7 @@ Or run a one-shot text command:
 python -m jarvis.main "what is my battery level"
 ```
 
-### 8. Setup Command Reference & Purpose
+### 9. Setup Command Reference & Purpose
 Below is a reference guide explaining the exact purpose of each command used in the setup process:
 
 | Command | Purpose |
