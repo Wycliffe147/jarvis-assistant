@@ -145,20 +145,24 @@ Follow these steps to set up Jarvis on a fresh Android phone:
 3. Grant necessary permissions to **Termux:API** in Android Settings (Microphone, Location, Camera, SMS, Contacts, Phone, and "Display over other apps").
 
 ### 2. Install Required System Packages
-Update packages and install Python, pre-compiled NumPy, Git, Termux-API tools, ADB, and optional dependencies:
+Update packages and install Python, Git, Termux-API tools, ADB, and optional dependencies:
 ```bash
 pkg update && pkg upgrade -y
-pkg install python python-numpy git termux-api android-tools tesseract ffmpeg -y
+pkg install python python-numpy portaudio git termux-api android-tools tesseract ffmpeg -y
 ```
+
+> [!IMPORTANT]
+> **Install `python-numpy` and `portaudio` via `pkg` before running pip.** PyPI does not host pre-compiled wheels for Android — if you skip this step, pip will compile `numpy` and `sounddevice` entirely from C/C++ source on your phone's processor, which takes **30–45+ minutes** on budget phones and can cause overheating or OOM crashes.
 
 ### 3. Clone Repository & Install Python Dependencies
 ```bash
 git clone https://github.com/Wycliffe147/jarvis-assistant.git jarvis
 cd jarvis
-pip install --prefer-binary -r requirements.txt
+pip install -r requirements.txt
 ```
+
 > [!TIP]
-> **Performance Note for Budget Phones**: Installing `python-numpy` via `pkg install` in Step 2 installs a pre-compiled binary in ~15 seconds. If skipped, `pip` attempts to compile NumPy from C source code on your phone, taking 20+ minutes on budget phone CPUs.
+> After running Step 2, `pip` will print `Requirement already satisfied: numpy` and skip it instantly. `sounddevice` will also build in seconds because `portaudio` headers are already available.
 
 ### 4. Create Environment File (`.env`)
 Create a `.env` file in the root of the `jarvis` directory:
@@ -223,7 +227,7 @@ Below is a reference guide explaining the exact purpose of each command used in 
 |---|---|
 | **`termux-setup-storage`** | Grants Termux permission to access shared device storage (`/sdcard/`). |
 | **`pkg update && pkg upgrade -y`** | Refreshes Termux package indices and upgrades all installed packages to their latest versions. |
-| **`pkg install python python-numpy git termux-api android-tools tesseract ffmpeg -y`** | Installs system binaries and pre-compiled NumPy required for Python runtime, fast math array handling, repository cloning, Android API bridge, local ADB automation, OCR, and audio stream handling. |
+| **`pkg install python python-numpy portaudio git termux-api android-tools tesseract ffmpeg -y`** | Installs system binaries including pre-compiled `numpy` and `portaudio`. These **must** come from `pkg` — PyPI has no Android wheels for them, so `pip` would otherwise compile them from C source (30–45+ min on budget phones). |
 | **`git clone ...`** | Downloads the latest Jarvis source code repository from GitHub to `~/jarvis`. |
 | **`pip install --prefer-binary -r requirements.txt`** | Installs all required Python packages using pre-compiled binary wheels. The `--prefer-binary` flag prevents pip from compiling packages from source, which can take 20+ minutes on budget phone CPUs. |
 | **`cat << 'EOF' > .env ...`** | Generates the local `.env` configuration file to store secret API credentials (`GROQ_API_KEY`, `CEREBRAS_API_KEY`). |

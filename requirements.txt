@@ -1,5 +1,6 @@
 python-dotenv
 requests
 beautifulsoup4
-numpy
 sounddevice
+# numpy must be installed via: pkg install python-numpy
+# PyPI has no Android wheels — pip will compile from source (30-45min+) if you add it here
