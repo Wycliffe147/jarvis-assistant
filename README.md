@@ -178,18 +178,23 @@ proot-distro login ubuntu -- apt update
 proot-distro login ubuntu -- apt install python3 python3-pip -y
 ```
 
-*(Optional)* Download the arm64 Piper binary and ONNX voice model into `~/piper/`:
+*(Optional)* Download the arm64 Piper binary and ONNX voice model. Run these commands **in Termux** (not inside Ubuntu):
 ```bash
 mkdir -p ~/piper && cd ~/piper
 
-# Download & extract Piper binary (Linux arm64)
-wget https://github.com/rhasspy/piper/releases/download/2023.8.15-2/piper_linux_aarch64.tar.gz
+# Install curl if not present, then download & extract Piper binary (Linux arm64)
+pkg install curl -y
+curl -L -o piper_linux_aarch64.tar.gz https://github.com/rhasspy/piper/releases/download/2023.8.15-2/piper_linux_aarch64.tar.gz
 tar -xvf piper_linux_aarch64.tar.gz
+mv piper/piper . 2>/dev/null || true
 
 # Download voice model and config
-wget https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/southern_english_female/low/en_GB-southern_english_female-low.onnx
-wget https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/southern_english_female/low/en_GB-southern_english_female-low.onnx.json
+curl -L -o en_GB-southern_english_female-low.onnx https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/southern_english_female/low/en_GB-southern_english_female-low.onnx
+curl -L -o en_GB-southern_english_female-low.onnx.json https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/southern_english_female/low/en_GB-southern_english_female-low.onnx.json
 ```
+
+> [!CAUTION]
+> Run these commands in **Termux**, not inside `proot-distro login ubuntu`. Ubuntu proot's minimal install does not have `wget` or `curl` by default — Termux does.
 
 > [!NOTE]
 > **Piper TTS is optional.** If `~/piper/piper` is missing or Ubuntu is not installed, Jarvis automatically falls back to Android's built-in system TTS engine (`termux-tts-speak`).
