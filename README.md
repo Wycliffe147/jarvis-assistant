@@ -238,9 +238,12 @@ Below is a reference guide explaining the exact purpose of each command used in 
 |---|---|
 | **`termux-setup-storage`** | Grants Termux permission to access shared device storage (`/sdcard/`). |
 | **`pkg update && pkg upgrade -y`** | Refreshes Termux package indices and upgrades all installed packages to their latest versions. |
-| **`pkg install python python-numpy portaudio git termux-api android-tools tesseract ffmpeg -y`** | Installs system binaries including pre-compiled `numpy` and `portaudio`. These **must** come from `pkg` — PyPI has no Android wheels for them, so `pip` would otherwise compile them from C source (30–45+ min on budget phones). |
+| **`pkg install python python-numpy portaudio git termux-api android-tools tesseract ffmpeg proot-distro -y`** | Installs system binaries including pre-compiled `numpy`, `portaudio`, and `proot-distro`. These **must** come from `pkg` — PyPI has no Android wheels for `numpy`, so `pip` would otherwise compile from source (30–45+ min on budget phones). |
+| **`proot-distro install ubuntu`** | Downloads and sets up a minimal Ubuntu environment required to run Piper TTS engine. |
+| **`proot-distro login ubuntu -- apt update`** | Updates Ubuntu package manager indices inside the container. |
+| **`proot-distro login ubuntu -- apt install python3 python3-pip -y`** | Installs Python 3 and Pip inside the Ubuntu container for Piper TTS support. |
 | **`git clone ...`** | Downloads the latest Jarvis source code repository from GitHub to `~/jarvis`. |
-| **`pip install --prefer-binary -r requirements.txt`** | Installs all required Python packages using pre-compiled binary wheels. The `--prefer-binary` flag prevents pip from compiling packages from source, which can take 20+ minutes on budget phone CPUs. |
+| **`pip install -r requirements.txt`** | Installs required Python libraries (`python-dotenv`, `requests`, `sounddevice`, `beautifulsoup4`). |
 | **`cat << 'EOF' > .env ...`** | Generates the local `.env` configuration file to store secret API credentials (`GROQ_API_KEY`, `CEREBRAS_API_KEY`). |
 | **`adb pair 127.0.0.1:<PORT> <CODE>`** | Authenticates Termux ADB with Android's Wireless Debugging service. |
 | **`adb connect 127.0.0.1:5555`** | Connects Termux ADB to the local loopback interface for on-screen UI inspection and app control. |
