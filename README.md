@@ -97,7 +97,14 @@ Both are the same physical device — neither is stray or removable. Any bare `a
 
 ## Requirements
 
-- Android phone, [Termux](https://termux.dev/) + [Termux:API](https://wiki.termux.com/wiki/Termux:API) app installed
+### Required Termux Apps
+| App | Status | Purpose |
+|---|---|---|
+| **Termux** | **Required** | Main terminal emulator environment running Python, Jarvis core, ADB, and system packages. |
+| **Termux:API** | **Required** | Companion app providing Android system API bindings (microphone, camera, SMS, calls, battery, notifications). |
+| **Termux:Widget** | **Optional (Recommended)** | Companion app for running launcher & control scripts (`shortcuts/`) directly from your home screen. |
+| **Termux:Boot** | **Optional** | Companion app that automatically executes startup scripts when the phone boots up. |
+
 - Python 3 + libraries (`requests`, `python-dotenv`, `sounddevice`, `numpy`, `beautifulsoup4`)
 - A [Groq](https://console.groq.com/) API key
 - `adb` binary + Wireless Debugging enabled on host phone
@@ -138,8 +145,8 @@ Both are the same physical device — neither is stray or removable. Any bare `a
 
 Follow these steps to set up Jarvis on a fresh Android phone:
 
-### 1. Install Termux & Termux:API
-1. Install **Termux** and **Termux:API** apps (preferably from [F-Droid](https://f-droid.org/) or GitHub Releases).
+### 1. Install Termux & Companion Apps
+1. Install **Termux** and **Termux:API** (Required), plus **Termux:Widget** and **Termux:Boot** (Optional) from [F-Droid](https://f-droid.org/) or GitHub Releases. All Termux add-on apps must come from the same installation source (e.g. all from F-Droid).
 2. Open Termux and grant storage access:
    ```bash
    termux-setup-storage
