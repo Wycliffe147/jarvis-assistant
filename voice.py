@@ -7,6 +7,29 @@ from jarvis.config import SAMPLE_RATE, SILENCE_THRESHOLD, AUDIO_FILE, SILENCE_TI
 from jarvis.ai import transcribe_audio
 from jarvis import state
 
+import subprocess
+
+_mic_settings_opened = False
+
+def _handle_mic_error(e: Exception, context_name: str = "Wake word error"):
+    global _mic_settings_opened
+    err_str = str(e)
+    if "-9999" in err_str or "Initializing inputstream failed" in err_str or "Permission" in err_str:
+        print(f"\n{COLOR_RED}[MICROPHONE PERMISSION REQUIRED]{COLOR_RESET}")
+        print(f"{COLOR_YELLOW}Termux does not have Microphone permission. Opening Termux App Settings...{COLOR_RESET}")
+        if not _mic_settings_opened:
+            _mic_settings_opened = True
+            try:
+                subprocess.run(
+                    ["am", "start", "-a", "android.settings.APPLICATION_DETAILS_SETTINGS", "-d", "package:com.termux"],
+                    stdin=subprocess.DEVNULL, capture_output=True
+                )
+            except Exception:
+                pass
+        time.sleep(5.0)
+    else:
+        print(f"{context_name}: {e}")
+
 def save_wav(filepath: str, audio: np.ndarray, sample_rate: int = SAMPLE_RATE):
     pcm = (audio * 32767).clip(-32768, 32767).astype(np.int16)
     with wave.open(filepath, 'wb') as wf:
@@ -45,13 +68,6 @@ def listen_for_wake_word(wake_word: str = "jarvis") -> str | None:
             print(f"{COLOR_GRAY}[Heard: {text}]{COLOR_RESET}", flush=True)
             command = re.sub(rf'(?i){matched_variant}[,\s]*', '', text).strip()
 
-            # Same noise filter get_voice_input() uses: after stripping the
-            # wake word, what's left might just be punctuation (e.g. saying
-            # only "Jarvis." leaves "." once the wake word is removed). That
-            # is not a real inline command -- it means the user said the
-            # wake word and nothing else, so this should fall through to
-            # get_voice_input() in main.py exactly like an empty command
-            # does, not get treated as "Jarvis, do this.".
             clean_command = command.replace(".", "").strip()
             if not clean_command:
                 return ""
@@ -61,7 +77,7 @@ def listen_for_wake_word(wake_word: str = "jarvis") -> str | None:
             return None
 
     except Exception as e:
-        print(f"Wake word error: {e}")
+        _handle_mic_error(e, "Wake word error")
     return None
 
 def get_voice_input() -> str | None:
@@ -137,5 +153,5 @@ def get_voice_input() -> str | None:
             print("Could not transcribe audio.")
             return None
     except Exception as e:
-        print(f"\nVoice Error: {e}")
+        _handle_mic_error(e, "Voice Error")
         return None
