@@ -155,15 +155,22 @@ pkg install python python-numpy portaudio git termux-api android-tools tesseract
 > [!IMPORTANT]
 > **Install `python-numpy` and `portaudio` via `pkg` before running pip.** PyPI does not host pre-compiled wheels for Android — if you skip this step, pip will compile `numpy` and `sounddevice` entirely from C/C++ source on your phone's processor, which takes **30–45+ minutes** on budget phones and can cause overheating or OOM crashes.
 
-### 3. Set Up Ubuntu via proot-distro
-Jarvis runs the [Piper TTS](https://github.com/rhasspy/piper) speech engine inside a lightweight Ubuntu environment. Install and bootstrap it:
+### 3. Set Up Ubuntu & Piper TTS (Offline Neural Voice)
+Jarvis uses [Piper TTS](https://github.com/rhasspy/piper) for high-quality, fast offline neural speech synthesis. Because Piper requires a standard Linux glibc environment, it runs inside a lightweight Ubuntu proot container.
+
+Install and bootstrap Ubuntu:
 ```bash
 proot-distro install ubuntu
 proot-distro login ubuntu -- apt update
 proot-distro login ubuntu -- apt install python3 python3-pip -y
 ```
+
+Place the Linux `piper` executable and `.onnx` voice model in `~/piper/`:
+- Executable: `~/piper/piper`
+- Voice model: `~/piper/en_GB-southern_english_female-low.onnx` (plus `.onnx.json`)
+
 > [!NOTE]
-> This downloads a minimal Ubuntu rootfs (~100 MB). It only needs to be done once. After this step, `proot-distro run ubuntu -- <cmd>` will work and Jarvis can use Piper TTS for speech output.
+> **Piper TTS is optional.** If `~/piper/piper` is missing or Ubuntu is not installed, Jarvis automatically falls back to Android's built-in system TTS engine (`termux-tts-speak`).
 
 ### 4. Clone Repository & Install Python Dependencies
 ```bash
