@@ -28,23 +28,8 @@ URL_CHAT     = "https://api.groq.com/openai/v1/chat/completions"
 URL_WHISPER  = "https://api.groq.com/openai/v1/audio/transcriptions"
 URL_CEREBRAS = "https://api.cerebras.ai/v1/chat/completions"
 
-MODEL_PRIMARY  = "llama-3.3-70b-versatile"
-# Fallback chain, in order: MODEL_PRIMARY (key 1) -> MODEL_PRIMARY (key 2, if
-# GROQ_API_KEY_SECONDARY is set) -> MODEL_CEREBRAS_FALLBACK -> MODEL_FALLBACK.
-# The secondary key step uses the SAME model as primary, just a different
-# Groq account/quota -- it exists purely to squeeze more free-tier capacity
-# out of the strongest available model before dropping down to Cerebras or
-# the much smaller 8b model.
-#
-# llama-3.1-8b-instant: fast, non-reasoning, follows the raw-JSON tool-call protocol
-# more directly than openai/gpt-oss-20b (a reasoning model that kept returning
-# empty content even with reasoning_effort=low / include_reasoning=False).
-# Previously this model hallucinated fake ADB results, but that was caused by
-# main.py writing "[Executed Results Summary]: ..." templates into chat history,
-# which it then pattern-completed. That's fixed now (see append_turn/
-# clean_assistant_turn in main.py) — history only ever contains natural-language
-# replies, never JSON tool-calls or result scaffolding.
-MODEL_FALLBACK = "llama-3.1-8b-instant"
+MODEL_PRIMARY  = "openai/gpt-oss-120b"
+MODEL_FALLBACK = "openai/gpt-oss-20b"
 MODEL_VISION   = "meta-llama/llama-4-scout-17b-16e-instruct"
 # Third tier: a genuinely separate provider/quota pool, used once BOTH Groq
 # primary keys are exhausted for the day. Bigger than MODEL_FALLBACK (120B

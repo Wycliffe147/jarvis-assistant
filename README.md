@@ -36,10 +36,9 @@ Wake word ("Jarvis") → Whisper STT → Local intent router → LLM (tool-calli
 
 | Purpose | Model |
 |---|---|
-| Primary chat/tool-calling | `llama-3.3-70b-versatile` (Groq) |
-| 2nd-tier fallback (separate quota pool, larger model) | `gpt-oss-120b` (Cerebras) |
-| Last-resort fallback (only if both above are exhausted same-day) | `llama-3.1-8b-instant` (Groq) |
-| Vision (photo analysis) | `meta-llama/llama-4-scout-17b-16e-instruct` (Groq) |
+| Primary chat/tool-calling | `openai/gpt-oss-120b` (Groq) |
+| 2nd-tier fallback (separate provider & quota pool) | `gpt-oss-120b` (Cerebras) |
+| Last-resort fallback | `openai/gpt-oss-20b` (Groq) |
 | Speech-to-text | `whisper-large-v3` (Groq) |
 
 <details>
